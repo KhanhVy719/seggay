@@ -709,7 +709,31 @@ const command = process.argv[2] || 'menu';
         await deleteHistory(null, { choice, yesLocal });
     } else if (command === 'server') await startServer();
     else if (command === 'xbogus') await downloadXbogusFiles();
-    else await showMenu();
+    else {
+        // 1. Tự động kiểm tra cấu hình tài khoản (Cookie & CSRF)
+        const current = await loadEnvFile();
+        const hasToken = current.TIKTOK_CSRF_TOKEN || process.env.TIKTOK_CSRF_TOKEN;
+        const hasCookie = current.TIKTOK_COOKIE || process.env.TIKTOK_COOKIE;
+        
+        if (!hasToken || !hasCookie) {
+            const rl = createRl();
+            try {
+                await ensureEnvInteractive(rl);
+            } finally {
+                rl.close();
+            }
+        }
+        
+        // 2. Tự động kiểm tra file bộ ký X-Bogus JSDOM
+        const htmlPath = path.join(__dirname, 'deobfuscator', 'select_account.html');
+        const jsPath = path.join(__dirname, 'deobfuscator', 'webmssdk_original.js');
+        if (!fs.existsSync(htmlPath) || !fs.existsSync(jsPath)) {
+            await downloadXbogusFiles();
+        }
+        
+        // 3. Mở Menu chính
+        await showMenu();
+    }
 })().catch((err) => {
     console.error('\n[FATAL] Launcher crash:');
     console.error(err && err.stack ? err.stack : err);
