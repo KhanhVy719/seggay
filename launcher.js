@@ -708,8 +708,31 @@ async function runChecks() {
     if (!syntaxOk) throw new Error('Syntax check thất bại, xem lỗi ở trên.');
 
     console.log('\n=== Test carrier encode/decode ===');
-    const code = await runNodeScript('test_carrier.js', []);
-    if (code !== 0) throw new Error(`test_carrier.js thất bại với mã ${code}`);
+    try {
+        const crypto = require('crypto');
+        const os = require('os');
+        const { encodePayloadToPng, decodePngCarrier } = require('./carrier');
+        const payload = crypto.randomBytes(1024 * 1024 + 123);
+        const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ttk-carrier-'));
+        const pngPath = path.join(workDir, 'carrier.png');
+
+        await encodePayloadToPng(payload, pngPath, {
+            jobId: 'local-carrier-test-job-000000000000',
+            index: 2,
+            total: 5,
+        });
+
+        const decoded = await decodePngCarrier(pngPath);
+        if (decoded.jobId !== 'local-carrier-test-job-000000000000') throw new Error('jobId mismatch');
+        if (decoded.index !== 2) throw new Error('index mismatch');
+        if (decoded.total !== 5) throw new Error('total mismatch');
+        if (!decoded.payload.equals(payload)) throw new Error('payload mismatch');
+
+        fs.rmSync(workDir, { recursive: true, force: true });
+        console.log('✅ carrier local encode/decode OK');
+    } catch (err) {
+        throw new Error(`test_carrier thất bại: ${err.message}`);
+    }
 }
 
 async function showMenu() {
