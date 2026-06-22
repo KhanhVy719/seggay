@@ -67,6 +67,47 @@ function parseEnv(raw) {
     return env;
 }
 
+function parseJ2teamCookies(text) {
+    try {
+        const parsed = JSON.parse(text);
+        let cookieArray = [];
+        if (Array.isArray(parsed)) {
+            cookieArray = parsed;
+        } else if (parsed && Array.isArray(parsed.cookies)) {
+            cookieArray = parsed.cookies;
+        } else {
+            return null;
+        }
+
+        const cookieStr = cookieArray.map(c => `${c.name}=${c.value}`).join('; ');
+        
+        let csrfToken = '';
+        const exactNames = ['tt_csrf_token', 'csrf_session_id', 'passport_csrf_token', 'ac_csrftoken', 'tt_csrf_token_default'];
+        
+        for (const name of exactNames) {
+            const found = cookieArray.find(c => c.name === name);
+            if (found && found.value) {
+                csrfToken = found.value;
+                break;
+            }
+        }
+        
+        if (!csrfToken) {
+            const found = cookieArray.find(c => String(c.name || '').toLowerCase().includes('csrf'));
+            if (found && found.value) {
+                csrfToken = found.value;
+            }
+        }
+
+        return {
+            TIKTOK_COOKIE: cookieStr,
+            TIKTOK_CSRF_TOKEN: csrfToken
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
 function quoteEnvValue(value) {
     value = String(value || '');
     if (/^[A-Za-z0-9_./:@-]*$/.test(value)) return value;
@@ -120,22 +161,29 @@ async function ensureEnvInteractive(existingRl = null) {
         if (!hasToken || !hasCookie) {
             console.log('\n======================================================================');
             console.log('⚠️ CẢNH BÁO: CHƯA THIẾT LẬP THÔNG TIN ĐĂNG NHẬP TIKTOK!');
-            console.log('Vui lòng làm theo hướng dẫn sau để lấy Cookie và CSRF Token:');
-            console.log('1. Đăng nhập vào tài khoản của bạn tại: https://www.tiktok.com/');
-            console.log('2. Nhấn F12 (hoặc Ctrl+Shift+I) để mở DevTools, chọn tab "Console".');
-            console.log('3. Copy toàn bộ đoạn mã trong file [devtools_get_tiktok_auth.js], dán và nhấn Enter.');
+            console.log('Bạn có hai cách để lấy và cấu hình Cookie/CSRF:');
+            console.log('----------------------------------------------------------------------');
+            console.log('👉 CÁCH 1: Dùng J2TEAM Cookies (KHUYÊN DÙNG - ĐẦY ĐỦ VÀ NHANH NHẤT)');
+            console.log('1. Cài extension J2TEAM Cookies trên trình duyệt Chrome/Edge/Cốc Cốc.');
+            console.log('2. Đăng nhập tài khoản của bạn tại: https://www.tiktok.com/');
+            console.log('3. Nhấp vào extension J2TEAM, chọn "Export" (Xuất) để tải tệp JSON về.');
+            console.log('4. Sao chép toàn bộ nội dung trong tệp JSON đó và dán trực tiếp vào bên dưới.');
+            console.log('----------------------------------------------------------------------');
+            console.log('👉 CÁCH 2: Dùng DevTools Console (Có thể thiếu HttpOnly sessionid)');
+            console.log('1. Đăng nhập https://www.tiktok.com/, nhấn F12 chọn tab "Console".');
+            console.log('2. Copy đoạn mã dưới đây dán vào và nhấn Enter:');
             console.log('----------------------------------------------------------------------');
             try {
                 const code = fs.readFileSync(path.join(__dirname, 'devtools_get_tiktok_auth.js'), 'utf8');
                 console.log(code);
             } catch (e) {
-                console.log(`// (Không tìm thấy file devtools_get_tiktok_auth.js, vui lòng mở tệp đó để lấy mã)`);
+                console.log(`// (Mở devtools_get_tiktok_auth.js trong thư mục để lấy mã)`);
             }
             console.log('----------------------------------------------------------------------');
-            console.log('4. Kết quả sẽ tự động lưu vào Clipboard, dán trực tiếp vào ô bên dưới.');
+            console.log('3. Copy toàn bộ văn bản kết quả in ra trong Console và dán vào bên dưới.');
             console.log('======================================================================\n');
 
-            console.log('👉 HÃY DÁN KHỐI CẤU HÌNH THU ĐƯỢC VÀO ĐÂY:');
+            console.log('👉 HÃY DÁN KHỐI JSON CỦA J2TEAM HOẶC KHỐI CONFIG TỪ DEVTOOLS VÀO ĐÂY:');
             console.log('(Hoặc nhấn Enter để bỏ qua dán khối và cấu hình thủ công từng dòng)');
             console.log('----------------------------------------------------------------------');
 
@@ -182,9 +230,21 @@ async function ensureEnvInteractive(existingRl = null) {
             });
 
             if (pastedText && pastedText.trim()) {
-                const parsed = parseEnv(pastedText);
-                if (parsed.TIKTOK_CSRF_TOKEN) updates.TIKTOK_CSRF_TOKEN = parsed.TIKTOK_CSRF_TOKEN;
-                if (parsed.TIKTOK_COOKIE) updates.TIKTOK_COOKIE = parsed.TIKTOK_COOKIE;
+                const trimmed = pastedText.trim();
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                    const j2team = parseJ2teamCookies(trimmed);
+                    if (j2team) {
+                        if (j2team.TIKTOK_CSRF_TOKEN) updates.TIKTOK_CSRF_TOKEN = j2team.TIKTOK_CSRF_TOKEN;
+                        if (j2team.TIKTOK_COOKIE) updates.TIKTOK_COOKIE = j2team.TIKTOK_COOKIE;
+                        console.log('✅ Đã nhận diện và bóc tách thành công định dạng J2TEAM Cookies JSON!');
+                    } else {
+                        console.log('❌ Định dạng JSON không tương thích với cấu trúc J2TEAM Cookies.');
+                    }
+                } else {
+                    const parsed = parseEnv(pastedText);
+                    if (parsed.TIKTOK_CSRF_TOKEN) updates.TIKTOK_CSRF_TOKEN = parsed.TIKTOK_CSRF_TOKEN;
+                    if (parsed.TIKTOK_COOKIE) updates.TIKTOK_COOKIE = parsed.TIKTOK_COOKIE;
+                }
             }
         }
 
