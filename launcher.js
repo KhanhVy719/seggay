@@ -16,7 +16,6 @@ const CHECK_FILES = [
     'launcher.js',
     'server.js',
     'upload.js',
-    'decoded.js',
     'tiktok.js',
     'carrier.js',
     'public/carrier-player.js',
