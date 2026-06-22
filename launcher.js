@@ -11,7 +11,7 @@ const ROOT = process.cwd();
 const ENV_PATH = path.join(ROOT, '.env');
 const MANIFEST_ROOT = path.join(ROOT, 'upload', 'tiktok', 'manifests');
 const PUBLIC_UPLOAD_ROOT = path.join(ROOT, 'public', 'upload');
-const REQUIRED_ENV = ['TIKTOK_ORG_ID', 'TIKTOK_CSRF_TOKEN', 'TIKTOK_COOKIE'];
+const REQUIRED_ENV = ['TIKTOK_CSRF_TOKEN', 'TIKTOK_COOKIE'];
 const CHECK_FILES = [
     'launcher.js',
     'server.js',
@@ -124,7 +124,7 @@ async function ensureEnvInteractive(existingRl = null) {
             console.log('Vui lòng làm theo hướng dẫn sau để lấy Cookie và CSRF Token:');
             console.log('1. Đăng nhập vào tài khoản của bạn tại: https://www.tiktok.com/');
             console.log('2. Nhấn F12 (hoặc Ctrl+Shift+I) để mở DevTools, chọn tab "Console".');
-            console.log('3. Copy đoạn mã dưới đây, dán vào tab Console và nhấn Enter:');
+            console.log('3. Copy toàn bộ đoạn mã trong file [devtools_get_tiktok_auth.js], dán và nhấn Enter.');
             console.log('----------------------------------------------------------------------');
             try {
                 const code = fs.readFileSync(path.join(__dirname, 'devtools_get_tiktok_auth.js'), 'utf8');
@@ -133,8 +133,60 @@ async function ensureEnvInteractive(existingRl = null) {
                 console.log(`// (Không tìm thấy file devtools_get_tiktok_auth.js, vui lòng mở tệp đó để lấy mã)`);
             }
             console.log('----------------------------------------------------------------------');
-            console.log('4. Kết quả sẽ tự động lưu vào Clipboard, dán các giá trị đó vào bên dưới:');
+            console.log('4. Kết quả sẽ tự động lưu vào Clipboard, dán trực tiếp vào ô bên dưới.');
             console.log('======================================================================\n');
+
+            console.log('👉 HÃY DÁN KHỐI CẤU HÌNH THU ĐƯỢC VÀO ĐÂY:');
+            console.log('(Hoặc nhấn Enter để bỏ qua dán khối và cấu hình thủ công từng dòng)');
+            console.log('----------------------------------------------------------------------');
+
+            const pastedText = await new Promise((resolve) => {
+                let lines = [];
+                let resolved = false;
+                let timer = null;
+                
+                const onLine = (line) => {
+                    if (resolved) return;
+                    const trimmed = line.trim();
+                    lines.push(line);
+                    
+                    const textSoFar = lines.join('\n');
+                    // Check if both keys are present
+                    if (textSoFar.includes('TIKTOK_CSRF_TOKEN=') && textSoFar.includes('TIKTOK_COOKIE=')) {
+                        resolved = true;
+                        if (timer) clearTimeout(timer);
+                        rl.removeListener('line', onLine);
+                        resolve(textSoFar);
+                        return;
+                    }
+                    
+                    // Finished on empty line if we have some text, or immediately if empty
+                    if (trimmed === '') {
+                        resolved = true;
+                        if (timer) clearTimeout(timer);
+                        rl.removeListener('line', onLine);
+                        resolve(textSoFar);
+                        return;
+                    }
+                    
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            rl.removeListener('line', onLine);
+                            resolve(lines.join('\n'));
+                        }
+                    }, 100);
+                };
+                
+                rl.on('line', onLine);
+            });
+
+            if (pastedText && pastedText.trim()) {
+                const parsed = parseEnv(pastedText);
+                if (parsed.TIKTOK_CSRF_TOKEN) updates.TIKTOK_CSRF_TOKEN = parsed.TIKTOK_CSRF_TOKEN;
+                if (parsed.TIKTOK_COOKIE) updates.TIKTOK_COOKIE = parsed.TIKTOK_COOKIE;
+            }
         }
 
         if (typeof current.USE_RPC_SIGNER === 'undefined' && typeof process.env.USE_RPC_SIGNER === 'undefined') {
@@ -142,7 +194,7 @@ async function ensureEnvInteractive(existingRl = null) {
         }
 
         for (const key of REQUIRED_ENV) {
-            const existing = current[key] || process.env[key] || '';
+            const existing = updates[key] || current[key] || process.env[key] || '';
             if (existing) continue;
             const answer = await ask(rl, `Nhập ${key} (Enter để bỏ qua tạm): `);
             if (answer) updates[key] = answer;
@@ -668,7 +720,7 @@ async function showMenu() {
         console.log(' TikTok Carrier Launcher');
         console.log('==============================');
         console.log('1. Check cài đặt/env và test sẵn sàng');
-        console.log('2. Nhập/cập nhật TikTok org id / csrf / cookie');
+        console.log('2. Nhập/cập nhật TikTok cookie / csrf token');
         console.log('3. Upload file video');
         console.log('4. Xem lịch sử video đã upload');
         console.log('5. Trích xuất URL chiếu phim + m3u8');
