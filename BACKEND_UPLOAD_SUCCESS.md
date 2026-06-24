@@ -97,7 +97,7 @@ $ node pure_lossless_upload.js test_larger.png
 
 Đang xử lý file: test_larger.png (8225 bytes)
 ✅ UPLOAD THÀNH CÔNG!
-🔗 Link: https://tos-my216-up.tiktokcdn.com/tos-alisg-pv-0037/...
+🔗 Link: https://tos-my216-up.tiktokcdn.com/tos-alisg-avt-0068/...
 ```
 
 ---
@@ -116,7 +116,7 @@ $ node pure_lossless_upload.js test_larger.png
 
 ### 3. Upload vào internal bucket
 - `ApplyUploadInner` với `SpaceName=tiktok` → Internal bucket
-- Bucket này được dùng cho video upload (lossless by default)
+- Bucket: `tos-alisg-avt-0068` (avatar/image lossless bucket)
 - Không qua web upload flow → Không cần WAF Token
 
 ### 4. CommitUploadInner finalize upload
