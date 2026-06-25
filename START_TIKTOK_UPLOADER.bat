@@ -44,37 +44,8 @@ echo.
 
 :: 3. Kiểm tra xem có thiếu file quan trọng nào không
 echo [CHECK] Đang kiểm tra đầy đủ các file mã nguồn cốt lõi...
-set MISSING_FILES=0
-
-for %%F in (
-    package.json
-    package-lock.json
-    carrier.js
-    server.js
-    server_extended.js
-    sign_client.js
-    signer_service.js
-    tiktok.js
-    tiktok_cdn_uploader.js
-    tiktok_volcengine_uploader.js
-    pure_lossless_upload.js
-    upload.js
-    public\carrier-player.js
-    public\carrier-worker.js
-    deobfuscator\select_account.html
-    deobfuscator\webmssdk_original.js
-    dashboard\dist\index.html
-) do (
-    if not exist "%%F" (
-        echo   [!] Thiếu file: %%F
-        set MISSING_FILES=1
-    )
-)
-
-if "!MISSING_FILES!"=="1" (
-    echo.
-    echo [LỖI] Thư mục dự án bị thiếu một hoặc nhiều file quan trọng ở trên.
-    echo Vui lòng kiểm tra lại branch Git hoặc kéo lại code đầy đủ (git pull).
+node check_files.js
+if errorlevel 1 (
     pause
     exit /b 1
 )
