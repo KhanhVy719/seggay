@@ -42,7 +42,46 @@ if errorlevel 1 (
 echo [OK] Cài đặt thư viện hoàn tất.
 echo.
 
-:: 3. Đọc PORT từ file .env nếu có, mặc định là 30001
+:: 3. Kiểm tra xem có thiếu file quan trọng nào không
+echo [CHECK] Đang kiểm tra đầy đủ các file mã nguồn cốt lõi...
+set MISSING_FILES=0
+
+for %%F in (
+    package.json
+    package-lock.json
+    carrier.js
+    server.js
+    server_extended.js
+    sign_client.js
+    signer_service.js
+    tiktok.js
+    tiktok_cdn_uploader.js
+    tiktok_volcengine_uploader.js
+    pure_lossless_upload.js
+    upload.js
+    public\carrier-player.js
+    public\carrier-worker.js
+    deobfuscator\select_account.html
+    deobfuscator\webmssdk_original.js
+    dashboard\dist\index.html
+) do (
+    if not exist "%%F" (
+        echo   [!] Thiếu file: %%F
+        set MISSING_FILES=1
+    )
+)
+
+if "!MISSING_FILES!"=="1" (
+    echo.
+    echo [LỖI] Thư mục dự án bị thiếu một hoặc nhiều file quan trọng ở trên.
+    echo Vui lòng kiểm tra lại branch Git hoặc kéo lại code đầy đủ (git pull).
+    pause
+    exit /b 1
+)
+echo [OK] Đầy đủ file mã nguồn.
+echo.
+
+:: 4. Đọc PORT từ file .env nếu có, mặc định là 30001
 set PORT=30001
 if exist .env (
     for /f "usebackq tokens=1,2 delims==" %%i in (".env") do (
@@ -52,7 +91,7 @@ if exist .env (
     )
 )
 
-:: 4. Hiển thị thông tin truy cập web
+:: 5. Hiển thị thông tin truy cập web
 echo ==================================================
 echo   🚀 SERVER ĐANG KHỞI CHẠY...
 echo   
@@ -61,7 +100,7 @@ echo   📺 Truy cập Player:    http://localhost:%PORT%/player
 echo ==================================================
 echo.
 
-:: 5. Chạy server
+:: 6. Chạy server
 node server_extended.js
 
 pause
