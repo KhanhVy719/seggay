@@ -945,6 +945,7 @@ class TiktokService {
         const manifest = {
             version: 4, // Version 4 denotes PNG append-TS carrier by default
             jobId,
+            status: 'processing',
             assetVersion: `${jobId}:seg-${seg}:target-${policy.targetSegmentBytes}:max-${policy.maxSegmentBytes}`,
             createdAt: new Date().toISOString(),
             source: {
@@ -1109,6 +1110,7 @@ class TiktokService {
         const allTranscodedUploadedFinal = manifest.segments.every(s => s.uploaded && s.imageUri);
         const allOriginalUploadedFinal = !isDual || manifest.originalSegments.every(s => s.uploaded && s.imageUri);
         manifest.complete = allTranscodedUploadedFinal && allOriginalUploadedFinal;
+        manifest.status = manifest.complete ? 'complete' : 'failed';
         manifest.updatedAt = new Date().toISOString();
         await writeJson(manifestPath, manifest);
 
