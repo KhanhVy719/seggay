@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare, Settings
+  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare, Settings, BookOpen, Code, ExternalLink, FileText
 } from 'lucide-react';
 
 const API = '';
@@ -51,6 +51,7 @@ const navItems = [
   { id: 'cdn', label: 'Cài đặt', icon: Settings },
   { id: 'jobs', label: 'Lịch sử', icon: History },
   { id: 'player', label: 'Trình phát', icon: PlayCircle },
+  { id: 'docs', label: 'Tài liệu API', icon: BookOpen },
 ];
 
 function SectionTitle({ title, subtitle }) {
@@ -1397,6 +1398,363 @@ function CarrierPlayer({ selectedJob }) {
   );
 }
 
+const apiEndpoints = [
+  {
+    category: 'Cấu hình & Hệ thống',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/server/status',
+        desc: 'Lấy thông tin trạng thái hoạt động của server Node.js, bao gồm port, uptime, các cấu hình môi trường và số luồng xử lý hiện tại.',
+        headers: [],
+        body: '',
+        response: '{\n  "status": "active",\n  "port": 30001,\n  "uptime": 235.42,\n  "env": {\n    "hasCookie": true,\n    "hasCsrf": true,\n    "hasOrg": true,\n    "cookieCount": 20,\n    "xBogusReady": true\n  },\n  "concurrency": {\n    "segmentConcurrency": 2,\n    "uploadConcurrency": 4,\n    "reconstructConcurrency": 8\n  }\n}'
+      },
+      {
+        method: 'POST',
+        path: '/api/config/concurrency',
+        desc: 'Cập nhật cấu hình số luồng song song cho các tác vụ tách HLS, upload CDN và khôi phục video. Ghi trực tiếp vào file .env và cập nhật RAM ngay lập tức.',
+        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        body: '{\n  "segmentConcurrency": 2,\n  "uploadConcurrency": 4,\n  "reconstructConcurrency": 8\n}',
+        response: '{\n  "ok": true,\n  "segmentConcurrency": 2,\n  "uploadConcurrency": 4,\n  "reconstructConcurrency": 8\n}'
+      },
+      {
+        method: 'POST',
+        path: '/api/cookies',
+        desc: 'Cập nhật Cookie TikTok đăng nhập mới. Hỗ trợ định dạng JSON J2Team Cookie hoặc chuỗi cookie thô. Tự động parse và lưu vào tệp .env / cập nhật RAM.',
+        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        body: '[\n  { "name": "sessionid", "value": "..." },\n  { "name": "tt_chain_token", "value": "..." }\n]',
+        response: '{\n  "ok": true,\n  "cookieCount": 2,\n  "env": {\n    "hasCookie": true,\n    "cookieCount": 2,\n    "xBogusReady": true\n  }\n}'
+      },
+      {
+        method: 'GET',
+        path: '/api/cookies/health',
+        desc: 'Kiểm tra sức khỏe Cookie TikTok đăng nhập bằng cách gửi request test lấy STS upload token. Đảm bảo cookie không bị hết hạn hoặc thiếu quyền.',
+        headers: [],
+        body: '',
+        response: '{\n  "status": "alive",\n  "alive": true,\n  "latencyMs": 142,\n  "cookieCount": 2,\n  "message": "Cookie còn sống, lấy STS Upload Token thành công."\n}'
+      },
+      {
+        method: 'GET',
+        path: '/api/xbogus/health',
+        desc: 'Kiểm tra hoạt động của bộ sinh chữ ký X-Bogus (local hoặc jsdom-rpc) bằng cách gửi request giả lập lên TikTok WAF.',
+        headers: [],
+        body: '',
+        response: '{\n  "status": "passed",\n  "ok": true,\n  "checkedAt": "2026-06-25T15:00:00.000Z",\n  "latencyMs": 95,\n  "signerMode": "local",\n  "httpStatus": 200,\n  "tikTokStatusCode": 0,\n  "message": "Chữ ký X-Bogus hợp lệ: TikTok đã nhận request..."\n}'
+      }
+    ]
+  },
+  {
+    category: 'Pipeline Tải Lên (Upload)',
+    endpoints: [
+      {
+        method: 'POST',
+        path: '/api/upload',
+        desc: 'API tải video nhị phân lên server để đưa vào pipeline xử lý. Server sẽ lưu tạm file, sinh Job ID và thực hiện tác vụ ngầm. Kết nối HTTP được giữ dưới dạng Server-Sent Events (SSE) để truyền logs.',
+        headers: [
+          { name: 'Content-Type', value: 'application/octet-stream' },
+          { name: 'x-filename', value: 'video.mp4 (Tên file gốc)' },
+          { name: 'x-segment-concurrency', value: '2 (Số luồng tách HLS)' },
+          { name: 'x-upload-concurrency', value: '4 (Số luồng upload CDN)' }
+        ],
+        body: 'Binary stream data (Dữ liệu file video thô)',
+        response: 'event: meta\ndata: {"ok":true,"filename":"upload_123.bin","bytes":10485760,"segmentConcurrency":2,"uploadConcurrency":4,"jobId":"a1b2c3d4-..."}\n\nevent: progress\ndata: {"step":"probe","percent":5,"message":"Video probing"}\n\nevent: done\ndata: {"ok":true,"jobId":"a1b2c3d4-...","playlistUrl":"...","carrierPlaylistUrl":"..."}'
+      },
+      {
+        method: 'GET',
+        path: '/api/jobs/:jobId/events',
+        desc: 'Đăng ký nhận luồng sự kiện SSE (Server-Sent Events) của một Job đang chạy ngầm để khôi phục log hiển thị và thanh tiến độ khi người dùng reload trang.',
+        headers: [],
+        body: '',
+        response: 'event: progress\ndata: {"step":"ffmpeg-cut","percent":35,"message":"Cắt video thành HLS..."}'
+      },
+      {
+        method: 'POST',
+        path: '/api/jobs/:jobId/cancel',
+        desc: 'Hủy khẩn cấp một job đang xử lý. Tắt tiến trình FFmpeg (nếu đang chạy), dừng các luồng upload CDN, cập nhật trạng thái job thành cancelled.',
+        headers: [],
+        body: '',
+        response: '{\n  "ok": true\n}'
+      }
+    ]
+  },
+  {
+    category: 'Quản Lý Jobs',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/jobs',
+        desc: 'Lấy danh sách tất cả các Jobs trong hệ thống (bao gồm cả job đang xử lý trong RAM và job đã hoàn thành trên đĩa).',
+        headers: [],
+        body: '',
+        response: '{\n  "jobs": [\n    {\n      "jobId": "a1b2c3d4-...",\n      "createdAt": "2026-06-25T15:00:00.000Z",\n      "updatedAt": "2026-06-25T15:05:00.000Z",\n      "total": 45,\n      "uploaded": 45,\n      "complete": true,\n      "status": "complete",\n      "percent": 100,\n      "size": 10485760,\n      "sourceSize": 10485760\n    }\n  ]\n}'
+      },
+      {
+        method: 'GET',
+        path: '/api/jobs/:jobId',
+        desc: 'Lấy Manifest JSON chi tiết của một job. Chứa danh sách các segments, thời lượng, kích thước và link ảnh carrier CDN.',
+        headers: [],
+        body: '',
+        response: '{\n  "jobId": "a1b2c3d4-...",\n  "createdAt": "2026-06-25T15:00:00.000Z",\n  "complete": true,\n  "status": "complete",\n  "segments": [\n    {\n      "index": 0,\n      "duration": 4.12,\n      "uploaded": true,\n      "imageUrl": "/api/jobs/a1b2c3d4-.../images/0",\n      "publicImageUrl": "https://p16-sg.tiktokcdn.com/...",\n      "directImageUrl": "https://p16-sign-sg.tiktokcdn.com/..."\n    }\n  ]\n}'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/jobs/:jobId',
+        desc: 'Xóa hoàn toàn dữ liệu của Job, bao gồm tệp Manifest JSON trên đĩa và thư mục chứa các mảnh video đã mã hoá.',
+        headers: [],
+        body: '',
+        response: '{\n  "ok": true\n}'
+      }
+    ]
+  },
+  {
+    category: 'Giải Mã / Khôi Phục',
+    endpoints: [
+      {
+        method: 'POST',
+        path: '/api/jobs/:jobId/reconstruct',
+        desc: 'Bắt đầu giải mã các segment dạng ảnh PNG carrier trên TikTok CDN thành các file .ts nhị phân và dùng FFmpeg ghép lại thành video MP4 gốc.',
+        headers: [],
+        body: '',
+        response: '{\n  "ok": true,\n  "state": {\n    "status": "processing",\n    "percent": 0,\n    "message": "Bắt đầu quá trình khôi phục..."\n  }\n}'
+      },
+      {
+        method: 'GET',
+        path: '/api/jobs/:jobId/reconstruct/status',
+        desc: 'Kiểm tra tiến độ giải mã khôi phục video thời gian thực từ RAM của server.',
+        headers: [],
+        body: '',
+        response: '{\n  "status": "processing",\n  "percent": 45,\n  "message": "Đang ghép các phân đoạn video (FFmpeg)...",\n  "error": null\n}'
+      },
+      {
+        method: 'GET',
+        path: '/api/jobs/:jobId/reconstruct/download',
+        desc: 'Tải về video MP4 hoàn chỉnh sau khi khôi phục thành công. Server sẽ tự động xoá file MP4 tạm này ngay khi quá trình download hoàn tất.',
+        headers: [],
+        body: '',
+        response: 'Binary Stream (.mp4 File)'
+      }
+    ]
+  },
+  {
+    category: 'Phát Video & Streaming',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/carrier/:jobId/master.m3u8',
+        desc: 'Trả về file Master Playlist định dạng HLS cho trình phát video. Các segment trong file trỏ tới API Proxy giải mã của Server.',
+        headers: [],
+        body: '',
+        response: '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/0.ts\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/1.ts\n#EXT-X-ENDLIST'
+      },
+      {
+        method: 'GET',
+        path: '/carrier/:jobId/segment/:index.ts',
+        desc: 'API Fallback / Proxy giải mã segment: Server sẽ tải ảnh PNG từ TikTok CDN về, giải mã nhị phân thành file TS gốc và stream trực tiếp về cho trình phát video HLS.',
+        headers: [],
+        body: '',
+        response: 'Binary Stream (.ts Video Segment)'
+      },
+      {
+        method: 'GET',
+        path: '/player?jobId=:jobId',
+        desc: 'Giao diện phát video trực tiếp. Tích hợp Hls.js và thuật toán client-side decoder: Trình duyệt tự tải ảnh PNG từ TikTok CDN về, giải mã trực tiếp bằng Canvas/Web Worker rồi truyền qua MSE để phát. Giảm tải 100% băng thông cho server Node.js.',
+        headers: [],
+        body: '',
+        response: 'HTML Page'
+      }
+    ]
+  }
+];
+
+function ApiDocs() {
+  const [selectedEndpoint, setSelectedEndpoint] = useState(apiEndpoints[0].endpoints[0]);
+  const [copiedText, setCopiedText] = useState('');
+
+  const handleCopy = (text, type) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedText(type);
+    setTimeout(() => setCopiedText(''), 2000);
+  };
+
+  const getMethodBadgeClass = (method) => {
+    switch (method) {
+      case 'GET': return 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30';
+      case 'POST': return 'bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/30';
+      case 'DELETE': return 'bg-red-500/15 text-red-300 ring-1 ring-red-500/30';
+      default: return 'bg-zinc-800 text-zinc-300';
+    }
+  };
+
+  const getJsSnippet = (endpoint) => {
+    let headersObj = {};
+    endpoint.headers.forEach(h => {
+      headersObj[h.name] = h.value;
+    });
+    
+    let options = {
+      method: endpoint.method,
+    };
+    
+    if (endpoint.headers.length > 0) {
+      options.headers = headersObj;
+    }
+    
+    if (endpoint.body) {
+      options.body = endpoint.body.startsWith('//') || endpoint.body.includes('Binary') 
+        ? '___BODY___'
+        : JSON.parse(endpoint.body.startsWith('{') ? endpoint.body : '{}');
+    }
+    
+    let optionsStr = JSON.stringify(options, null, 2);
+    if (endpoint.body && (endpoint.body.startsWith('//') || endpoint.body.includes('Binary') || endpoint.body.includes('['))) {
+      optionsStr = optionsStr.replace('"___BODY___"', '/* Dữ liệu nhị phân hoặc danh sách Cookies */');
+    }
+    
+    return `// JavaScript Fetch Example
+fetch('${window.location.origin}${endpoint.path}', ${optionsStr})
+  .then(res => res.json())
+  .then(data => console.log(data))
+  .catch(err => console.error(err));`;
+  };
+
+  return (
+    <div className="space-y-6">
+      <SectionTitle title="Tài liệu API & Hướng dẫn sử dụng" subtitle="Full API của hệ thống TikTok Carrier Pipeline, phục vụ tích hợp bên thứ ba hoặc phát triển mở rộng." />
+      
+      <div className="grid gap-6 lg:grid-cols-4">
+        {/* Sidebar */}
+        <Card className="p-4 lg:col-span-1 space-y-4 max-h-[80vh] overflow-y-auto">
+          {apiEndpoints.map((cat, catIdx) => (
+            <div key={catIdx} className="space-y-1">
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 px-2 py-1">{cat.category}</div>
+              {cat.endpoints.map((ep, epIdx) => {
+                const isSelected = selectedEndpoint.path === ep.path && selectedEndpoint.method === ep.method;
+                return (
+                  <button
+                    key={epIdx}
+                    onClick={() => setSelectedEndpoint(ep)}
+                    className={`w-full flex flex-col text-left rounded-lg p-2 transition-all duration-200 ${isSelected ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'}`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${getMethodBadgeClass(ep.method)}`}>{ep.method}</span>
+                      <span className="font-mono text-xs truncate">{ep.path}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </Card>
+
+        {/* Content */}
+        <Card className="p-6 lg:col-span-3 space-y-6 min-h-[60vh] overflow-x-hidden">
+          {/* Header */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800 pb-4">
+            <div className="flex items-center gap-3">
+              <span className={`text-xs px-2.5 py-1 rounded-lg font-mono font-bold ${getMethodBadgeClass(selectedEndpoint.method)}`}>
+                {selectedEndpoint.method}
+              </span>
+              <span className="font-mono text-lg font-semibold tracking-tight text-zinc-100">{selectedEndpoint.path}</span>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => handleCopy(`${window.location.origin}${selectedEndpoint.path}`, 'url')}>
+                <Copy className="h-4 w-4" />
+                {copiedText === 'url' ? 'Đã copy URL!' : 'Copy full URL'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Description */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+              <FileText className="h-4 w-4 text-cyan-300" /> Mô tả
+            </h3>
+            <p className="text-sm text-zinc-400 leading-relaxed">{selectedEndpoint.desc}</p>
+          </div>
+
+          {/* Headers */}
+          {selectedEndpoint.headers.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                <Code className="h-4 w-4 text-emerald-300" /> Request Headers
+              </h3>
+              <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/60">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-zinc-900 text-zinc-400">
+                    <tr>
+                      <th className="px-4 py-2">Header Name</th>
+                      <th className="px-4 py-2">Example Value</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800 text-zinc-300">
+                    {selectedEndpoint.headers.map((h, i) => (
+                      <tr key={i}>
+                        <td className="px-4 py-2 text-cyan-200">{h.name}</td>
+                        <td className="px-4 py-2">{h.value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Body */}
+          {selectedEndpoint.body && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                  <Binary className="h-4 w-4 text-purple-300" /> Request Body
+                </h3>
+                <Button variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleCopy(selectedEndpoint.body, 'body')}>
+                  <Copy className="h-3 w-3" />
+                  {copiedText === 'body' ? 'Đã copy!' : 'Copy'}
+                </Button>
+              </div>
+              <pre className="p-4 rounded-lg bg-black/80 font-mono text-xs text-zinc-300 overflow-auto border border-zinc-800 max-h-48 whitespace-pre-wrap">
+                {selectedEndpoint.body}
+              </pre>
+            </div>
+          )}
+
+          {/* Response */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                <Database className="h-4 w-4 text-yellow-300" /> Response Example
+              </h3>
+              <Button variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleCopy(selectedEndpoint.response, 'res')}>
+                <Copy className="h-3 w-3" />
+                {copiedText === 'res' ? 'Đã copy!' : 'Copy'}
+              </Button>
+            </div>
+            <pre className="p-4 rounded-lg bg-black/80 font-mono text-xs text-zinc-300 overflow-auto border border-zinc-800 max-h-64">
+              {selectedEndpoint.response}
+            </pre>
+          </div>
+
+          {/* Example Code */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                <Code className="h-4 w-4 text-cyan-300" /> JavaScript Fetch
+              </h3>
+              <Button variant="ghost" className="h-7 px-2 text-xs" onClick={() => handleCopy(getJsSnippet(selectedEndpoint), 'js')}>
+                <Copy className="h-3 w-3" />
+                {copiedText === 'js' ? 'Đã copy!' : 'Copy'}
+              </Button>
+            </div>
+            <pre className="p-4 rounded-lg bg-black/80 font-mono text-xs text-emerald-400 overflow-auto border border-zinc-800 whitespace-pre">
+              {getJsSnippet(selectedEndpoint)}
+            </pre>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function TerminalPanel({ logs }) {
   return (
     <Card className="mt-6 overflow-hidden">
@@ -1460,6 +1818,7 @@ export default function App() {
     cdn: <CdnManager />,
     jobs: <JobHistory onPlay={playJob} onViewProgress={(jobId) => { setRestoreJobId(jobId); setTab('upload'); }} />,
     player: <CarrierPlayer selectedJob={selectedJob} />,
+    docs: <ApiDocs />,
   };
 
   return (
