@@ -43,7 +43,28 @@ async function readTokens() {
   ensureTokensFile();
   try {
     const raw = await fsp.readFile(TOKENS_FILE, 'utf8');
-    return JSON.parse(raw);
+    let tokens = JSON.parse(raw);
+    if (!Array.isArray(tokens)) {
+      tokens = [];
+    }
+    // Self-healing: if there is no active token, reactivate tok_admin_default_719
+    const activeCount = tokens.filter(t => t.active).length;
+    if (activeCount === 0) {
+      console.warn('[Security] No active tokens found. Reactivating tok_admin_default_719 for safety.');
+      const adminToken = tokens.find(t => t.token === 'tok_admin_default_719');
+      if (adminToken) {
+        adminToken.active = true;
+      } else {
+        tokens.push({
+          username: 'admin',
+          token: 'tok_admin_default_719',
+          createdAt: new Date().toISOString(),
+          active: true
+        });
+      }
+      await writeTokens(tokens);
+    }
+    return tokens;
   } catch (e) {
     return [];
   }
@@ -1546,6 +1567,14 @@ app.post('/api/tokens/:token/toggle', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Không tìm thấy token này' });
     }
     
+    // Chống lock-out: Không cho phép vô hiệu hóa token duy nhất đang hoạt động
+    if (found.active) {
+      const activeCount = tokens.filter(t => t.active).length;
+      if (activeCount <= 1) {
+        return res.status(400).json({ ok: false, error: 'Không thể vô hiệu hóa token duy nhất đang hoạt động' });
+      }
+    }
+    
     found.active = !found.active;
     await writeTokens(tokens);
     
@@ -1561,10 +1590,16 @@ app.delete('/api/tokens/:token', async (req, res) => {
     let tokens = await readTokens();
     const initialLength = tokens.length;
     
-    if (tokenStr === 'tok_admin_default_719') {
+    const targetToken = tokens.find(t => t.token === tokenStr);
+    if (!targetToken) {
+      return res.status(404).json({ ok: false, error: 'Không tìm thấy token này' });
+    }
+    
+    // Chống lock-out: Không thể xóa token duy nhất đang hoạt động
+    if (targetToken.active) {
       const activeCount = tokens.filter(t => t.active).length;
       if (activeCount <= 1) {
-        return res.status(400).json({ ok: false, error: 'Không thể xoá token Admin mặc định duy nhất đang hoạt động' });
+        return res.status(400).json({ ok: false, error: 'Không thể xoá token duy nhất đang hoạt động' });
       }
     }
     
