@@ -1,5 +1,16 @@
 // server_extended.js
 require('dotenv').config();
+
+// Auto-fallback: Sync TIKTOK_COOKIE from CONSUMER_COOKIES_JSON if missing
+if (!process.env.TIKTOK_COOKIE && process.env.CONSUMER_COOKIES_JSON) {
+  try {
+    const parsed = JSON.parse(process.env.CONSUMER_COOKIES_JSON);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      process.env.TIKTOK_COOKIE = parsed.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (e) {}
+}
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
@@ -294,7 +305,7 @@ function pickCsrfToken(cookies) {
 
 function readEnvSummary() {
   const healthCookieSource = getHealthCookieSource();
-  const hasCookie = Boolean(process.env.TIKTOK_COOKIE);
+  const hasCookie = Boolean(process.env.TIKTOK_COOKIE) || (healthCookieSource.cookieCount > 0);
   const hasCsrf = Boolean(process.env.TIKTOK_CSRF_TOKEN);
   const hasOrg = Boolean(process.env.TIKTOK_ORG_ID);
   const cookieCount = healthCookieSource.cookieCount;
@@ -631,15 +642,30 @@ app.post('/api/cookies', express.json({ limit: '1mb' }), async (req, res) => {
     }
 
     const cookiesJson = JSON.stringify(cookies);
+    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
     const envPath = path.join(ROOT, '.env');
-    const raw = await fsp.readFile(envPath, 'utf8').catch(() => '');
-    const line = `CONSUMER_COOKIES_JSON=${cookiesJson}`;
-    const next = /^CONSUMER_COOKIES_JSON=.*$/m.test(raw)
-      ? raw.replace(/^CONSUMER_COOKIES_JSON=.*$/m, line)
-      : `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${line}\n`;
+    let raw = await fsp.readFile(envPath, 'utf8').catch(() => '');
 
-    await fsp.writeFile(envPath, next, 'utf8');
+    // Cập nhật hoặc thêm CONSUMER_COOKIES_JSON
+    const lineConsumer = `CONSUMER_COOKIES_JSON=${cookiesJson}`;
+    if (/^CONSUMER_COOKIES_JSON=.*$/m.test(raw)) {
+      raw = raw.replace(/^CONSUMER_COOKIES_JSON=.*$/m, lineConsumer);
+    } else {
+      raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineConsumer}\n`;
+    }
+
+    // Cập nhật hoặc thêm TIKTOK_COOKIE
+    const lineTiktok = `TIKTOK_COOKIE='${cookieStr}'`;
+    if (/^TIKTOK_COOKIE=.*$/m.test(raw)) {
+      raw = raw.replace(/^TIKTOK_COOKIE=.*$/m, lineTiktok);
+    } else {
+      raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineTiktok}\n`;
+    }
+
+    await fsp.writeFile(envPath, raw, 'utf8');
     process.env.CONSUMER_COOKIES_JSON = cookiesJson;
+    process.env.TIKTOK_COOKIE = cookieStr;
+
     res.json({ ok: true, cookieCount: cookies.length, env: readEnvSummary() });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

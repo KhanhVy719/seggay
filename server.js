@@ -1,5 +1,16 @@
 // server.js
 require('dotenv').config();
+
+// Auto-fallback: Sync TIKTOK_COOKIE from CONSUMER_COOKIES_JSON if missing
+if (!process.env.TIKTOK_COOKIE && process.env.CONSUMER_COOKIES_JSON) {
+  try {
+    const parsed = JSON.parse(process.env.CONSUMER_COOKIES_JSON);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      process.env.TIKTOK_COOKIE = parsed.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (e) {}
+}
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs');

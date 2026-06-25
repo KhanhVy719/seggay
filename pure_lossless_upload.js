@@ -18,6 +18,16 @@ const crypto = require('crypto');
 const axios = require('axios');
 require('dotenv').config();
 
+// Auto-fallback: Sync TIKTOK_COOKIE from CONSUMER_COOKIES_JSON if missing
+if (!process.env.TIKTOK_COOKIE && process.env.CONSUMER_COOKIES_JSON) {
+  try {
+    const parsed = JSON.parse(process.env.CONSUMER_COOKIES_JSON);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      process.env.TIKTOK_COOKIE = parsed.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (e) {}
+}
+
 const SIGNER_URL = 'http://127.0.0.1:35123';
 
 // Helper: HMAC-SHA256

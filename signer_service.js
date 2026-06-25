@@ -12,6 +12,17 @@
 // Yêu cầu: .env có TIKTOK_COOKIE (sessionid còn hạn)
 
 require('dotenv').config();
+
+// Auto-fallback: Sync TIKTOK_COOKIE from CONSUMER_COOKIES_JSON if missing
+if (!process.env.TIKTOK_COOKIE && process.env.CONSUMER_COOKIES_JSON) {
+  try {
+    const parsed = JSON.parse(process.env.CONSUMER_COOKIES_JSON);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      process.env.TIKTOK_COOKIE = parsed.map(c => `${c.name}=${c.value}`).join('; ');
+    }
+  } catch (e) {}
+}
+
 const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
