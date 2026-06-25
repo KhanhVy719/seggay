@@ -1161,9 +1161,14 @@ function JobHistory({ onPlay, onViewProgress }) {
                             <Download className="h-4 w-4" />Khôi phục Video
                           </button>
                           {job.status === 'processing' ? (
-                            <button onClick={() => cancelJob(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:bg-red-500/10 focus:outline-none">
-                              <AlertCircle className="h-4 w-4" />Hủy tiến trình
-                            </button>
+                            <>
+                              <button onClick={() => { onViewProgress?.(job.jobId); setOpenMenu(null); }} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-cyan-200 transition-colors hover:bg-cyan-500/10 hover:text-cyan-100 focus:bg-cyan-500/10 focus:outline-none">
+                                <Activity className="h-4 w-4" />Xem tiến độ
+                              </button>
+                              <button onClick={() => cancelJob(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:bg-red-500/10 focus:outline-none">
+                                <AlertCircle className="h-4 w-4" />Hủy tiến trình
+                              </button>
+                            </>
                           ) : null}
                           <button onClick={() => remove(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:bg-red-500/10 focus:outline-none">
                             <Trash2 className="h-4 w-4" />Xóa video đã tải
