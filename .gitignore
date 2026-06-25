@@ -18,7 +18,6 @@ avatar_*.js
 fetch_webmssdk.js
 create_polyglot.js
 debug_player.js
-decoded.js
 print_window_keys.js
 fix_env.js
 
