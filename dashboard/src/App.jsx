@@ -8,13 +8,22 @@ const API = '';
 // Global Fetch Interceptor to inject API Token authentication header
 (function() {
   const originalFetch = window.fetch;
-  window.fetch = function(url, options = {}) {
-    if (typeof url === 'string' && (url.startsWith('/api/') || url.includes('/api/'))) {
+  window.fetch = async function(url, options = {}) {
+    if (url && (typeof url === 'string') && (url.startsWith('/api/') || url.includes('/api/'))) {
       const token = localStorage.getItem('api_token') || 'tok_admin_default_719';
       options.headers = {
         ...options.headers,
         'Authorization': `Bearer ${token}`
       };
+      try {
+        const response = await originalFetch.call(this, url, options);
+        if (response.status === 401 || response.status === 403) {
+          window.dispatchEvent(new CustomEvent('ttk-token-error', { detail: { status: response.status } }));
+        }
+        return response;
+      } catch (err) {
+        throw err;
+      }
     }
     return originalFetch.call(this, url, options);
   };
@@ -1869,6 +1878,10 @@ function TokenManager() {
     try {
       const res = await fetch(`${API}/api/tokens`);
       if (!res.ok) {
+        if (res.status === 403 || res.status === 401) {
+          setError(`Lỗi xác thực (${res.status}): API Token hiện tại không hợp lệ hoặc đã bị vô hiệu hóa. Vui lòng nhập token chính xác ở phần "Cấu hình Phiên Dashboard" bên trái (mặc định là tok_admin_default_719).`);
+          return;
+        }
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `HTTP ${res.status}`);
       }
@@ -2138,6 +2151,13 @@ export default function App() {
   const [restoreJobId, setRestoreJobId] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState(['server đã sẵn sàng tại /dashboard', 'pipeline tải lên đang chờ']);
   const [status, setStatus] = useState(null);
+  const [tokenError, setTokenError] = useState(false);
+
+  useEffect(() => {
+    const handleTokenError = () => setTokenError(true);
+    window.addEventListener('ttk-token-error', handleTokenError);
+    return () => window.removeEventListener('ttk-token-error', handleTokenError);
+  }, []);
 
   useEffect(() => {
     async function getStatus() {
@@ -2210,6 +2230,21 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2 text-sm text-zinc-400"><ShieldCheck className="h-4 w-4 text-emerald-400" />Đã kết nối</div>
         </header>
+
+        {tokenError && (
+          <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 shrink-0 text-red-400" />
+              <span>
+                <strong>Lỗi Xác thực API Token (401/403)</strong>: Token hiện tại của bạn không hợp lệ hoặc đã bị vô hiệu hóa trên server. Vui lòng chuyển sang tab <strong>Quản lý Token</strong> để cấu hình lại, hoặc bấm reset về token mặc định.
+              </span>
+            </div>
+            <Button variant="danger" className="h-8 py-1 text-xs shrink-0" onClick={() => { localStorage.setItem('api_token', 'tok_admin_default_719'); window.location.reload(); }}>
+              Reset về Token mặc định
+            </Button>
+          </div>
+        )}
+
         {views[tab]}
         <TerminalPanel logs={terminalLogs} />
       </main>
