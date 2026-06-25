@@ -1026,6 +1026,17 @@ function JobHistory({ onPlay, onViewProgress }) {
 
   useEffect(() => { refresh().catch(() => {}); }, []);
 
+  useEffect(() => {
+    const hasActive = jobs.some(j => j.status === 'processing');
+    if (!hasActive) return;
+
+    const intervalId = setInterval(() => {
+      refresh().catch(() => {});
+    }, 2000);
+
+    return () => clearInterval(intervalId);
+  }, [jobs]);
+
   async function remove(jobId) {
     setBusy(prev => ({ ...prev, [jobId]: 'delete' }));
     try {
