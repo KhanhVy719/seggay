@@ -616,6 +616,10 @@ app.get('/api/server/status', (req, res) => {
     port: PORT,
     uptime: process.uptime(),
     env: readEnvSummary(),
+    concurrency: {
+      segmentConcurrency: Number(process.env.SEGMENT_CONCURRENCY || 1),
+      uploadConcurrency: Number(process.env.UPLOAD_CONCURRENCY || 3),
+    }
   });
 });
 
@@ -674,6 +678,41 @@ app.post('/api/cookies', express.json({ limit: '1mb' }), async (req, res) => {
 
 app.post('/api/xbogus/refresh', (req, res) => {
   res.json({ ok: true, message: 'xbogus helper is available through existing pipeline' });
+});
+
+app.post('/api/config/concurrency', express.json(), async (req, res) => {
+  try {
+    const { segmentConcurrency, uploadConcurrency } = req.body;
+    const seg = Math.max(1, Math.min(4, Number(segmentConcurrency || 1)));
+    const up = Math.max(1, Math.min(8, Number(uploadConcurrency || 3)));
+
+    const envPath = path.join(ROOT, '.env');
+    let raw = await fsp.readFile(envPath, 'utf8').catch(() => '');
+
+    // Cập nhật hoặc thêm SEGMENT_CONCURRENCY
+    const lineSeg = `SEGMENT_CONCURRENCY=${seg}`;
+    if (/^SEGMENT_CONCURRENCY=.*$/m.test(raw)) {
+      raw = raw.replace(/^SEGMENT_CONCURRENCY=.*$/m, lineSeg);
+    } else {
+      raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineSeg}\n`;
+    }
+
+    // Cập nhật hoặc thêm UPLOAD_CONCURRENCY
+    const lineUp = `UPLOAD_CONCURRENCY=${up}`;
+    if (/^UPLOAD_CONCURRENCY=.*$/m.test(raw)) {
+      raw = raw.replace(/^UPLOAD_CONCURRENCY=.*$/m, lineUp);
+    } else {
+      raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineUp}\n`;
+    }
+
+    await fsp.writeFile(envPath, raw, 'utf8');
+    process.env.SEGMENT_CONCURRENCY = String(seg);
+    process.env.UPLOAD_CONCURRENCY = String(up);
+
+    res.json({ ok: true, segmentConcurrency: seg, uploadConcurrency: up });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.post('/api/upload', async (req, res) => {

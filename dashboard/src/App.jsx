@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare
+  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare
 } from 'lucide-react';
 
 const API = '';
@@ -327,7 +327,7 @@ function normalizeThreadInput(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.floor(number)));
 }
 
-function VideoUploader({ onLog }) {
+function VideoUploader({ onLog, serverStatus }) {
   const [file, setFile] = useState(null);
   const [open, setOpen] = useState(false);
   const [browserUploadProgress, setBrowserUploadProgress] = useState(0);
@@ -336,11 +336,49 @@ function VideoUploader({ onLog }) {
   const [uploading, setUploading] = useState(false);
   const [share, setShare] = useState(null);
   const [segments, setSegments] = useState({ current: 0, total: 0, uploaded: 0, phasePercent: 0, duration: 0, file: '' });
-  const [segmentConcurrencyInput, setSegmentConcurrencyInput] = useState('1');
-  const [uploadConcurrencyInput, setUploadConcurrencyInput] = useState('3');
+  const [segmentConcurrencyInput, setSegmentConcurrencyInput] = useState(() => localStorage.getItem('segment_concurrency') || '1');
+  const [uploadConcurrencyInput, setUploadConcurrencyInput] = useState(() => localStorage.getItem('upload_concurrency') || '3');
   const [uploadLog, setUploadLog] = useState([]);
   const inputRef = useRef(null);
   const xhrRef = useRef(null);
+
+  useEffect(() => {
+    if (!localStorage.getItem('segment_concurrency') && serverStatus?.concurrency?.segmentConcurrency) {
+      setSegmentConcurrencyInput(String(serverStatus.concurrency.segmentConcurrency));
+    }
+    if (!localStorage.getItem('upload_concurrency') && serverStatus?.concurrency?.uploadConcurrency) {
+      setUploadConcurrencyInput(String(serverStatus.concurrency.uploadConcurrency));
+    }
+  }, [serverStatus]);
+
+  const saveConcurrencySettings = async () => {
+    try {
+      const response = await fetch('/api/config/concurrency', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          segmentConcurrency,
+          uploadConcurrency,
+        }),
+      });
+      const data = await response.json();
+      if (data.ok) {
+        localStorage.setItem('segment_concurrency', String(data.segmentConcurrency));
+        localStorage.setItem('upload_concurrency', String(data.uploadConcurrency));
+        appendUploadLog(`[Cấu hình] Đã lưu số luồng: tách HLS ${data.segmentConcurrency} luồng · upload CDN ${data.uploadConcurrency} luồng`);
+        alert(`Đã lưu cấu hình luồng thành công!\n- Luồng tách: ${data.segmentConcurrency}\n- Luồng upload: ${data.uploadConcurrency}`);
+      } else {
+        throw new Error(data.error || 'Lỗi không xác định');
+      }
+    } catch (err) {
+      appendUploadLog(`[Lỗi] Không thể lưu cấu hình luồng: ${err.message}`);
+      localStorage.setItem('segment_concurrency', String(segmentConcurrency));
+      localStorage.setItem('upload_concurrency', String(uploadConcurrency));
+      alert(`Đã lưu tạm cấu hình luồng vào trình duyệt (Lỗi lưu server: ${err.message})`);
+    }
+  };
   const segmentConcurrency = normalizeThreadInput(segmentConcurrencyInput || '1', 1, 1, 4);
   const uploadConcurrency = normalizeThreadInput(uploadConcurrencyInput || '3', 3, 1, 8);
 
@@ -536,15 +574,7 @@ function VideoUploader({ onLog }) {
 
         {open ? (
           <div className="mt-4 space-y-4 rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
-            <div className="grid gap-3 md:grid-cols-4">
-              {carrierLabels.map((label, idx) => (
-                <label key={label} className="space-y-2 text-sm text-zinc-300">
-                  <span>{label}</span>
-                  <input className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 outline-none focus:ring-2 focus:ring-cyan-500/60" defaultValue={idx === 0 ? '1920' : idx === 1 ? '1080' : idx === 2 ? '8' : 'TTKPIX1'} />
-                </label>
-              ))}
-            </div>
-            <div className="grid gap-3 border-t border-zinc-800 pt-4 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-2 text-sm text-zinc-300">
                 <span className="flex items-center gap-2"><Scissors className="h-4 w-4 text-cyan-300" />Luồng tách HLS (1-4)</span>
                 <input type="number" min="1" max="4" value={segmentConcurrencyInput} onChange={handleSegmentConcurrencyChange} onBlur={handleSegmentConcurrencyBlur} onFocus={e => e.target.select()} className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono outline-none focus:ring-2 focus:ring-cyan-500/60" />
@@ -555,6 +585,14 @@ function VideoUploader({ onLog }) {
                 <input type="number" min="1" max="8" value={uploadConcurrencyInput} onChange={handleUploadConcurrencyChange} onBlur={handleUploadConcurrencyBlur} onFocus={e => e.target.select()} className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono outline-none focus:ring-2 focus:ring-cyan-500/60" />
                 <span className="block text-xs text-zinc-500">Upload song song các segment carrier lên TikTok CDN, chỉ tự ép 1-8 khi rời ô hoặc bắt đầu upload.</span>
               </label>
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={saveConcurrencySettings}
+                className="flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/60"
+              >
+                <Save className="h-4 w-4" /> Lưu cấu hình luồng
+              </button>
             </div>
           </div>
         ) : null}
@@ -1173,7 +1211,7 @@ export default function App() {
   };
   const views = {
     home: <DashboardHome />,
-    upload: <VideoUploader onLog={appendTerminalLog} />,
+    upload: <VideoUploader onLog={appendTerminalLog} serverStatus={status} />,
     cdn: <CdnManager />,
     jobs: <JobHistory onPlay={playJob} />,
     player: <CarrierPlayer selectedJob={selectedJob} />,
