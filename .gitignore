@@ -1,0 +1,51 @@
+# Exclude Node dependencies
+node_modules/
+
+# Exclude local environment configs and secrets
+.env
+.env.bak
+.env.local
+launcher-last-run.log
+
+# Exclude local uploads, segments, and manifests
+upload/
+public/upload/
+
+# Exclude test files
+test_*.js
+check_seg.js
+avatar_*.js
+fetch_webmssdk.js
+create_polyglot.js
+debug_player.js
+decoded.js
+print_window_keys.js
+fix_env.js
+
+# Exclude large media and images
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Exclude markdown documents
+*.md
+deobfuscation_report.md
+research_cors_cdn.md
+
+# Exclude unused directories
+xbogus_test/
+avatar_upload_work/
+X-Bogus/
+.claude/
+.gemini/
+
+# Exclude reverse engineering files except the official JS/HTML templates
+deobfuscator/*
+!deobfuscator/webmssdk_original.js
+!deobfuscator/select_account.html
+browser_data/
