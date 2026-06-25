@@ -207,48 +207,63 @@ async function main() {
         const cookie = process.env.TIKTOK_COOKIE || '';
         const jobs = new Map();
 
-        for (let i = 0; i < imageSources.length; i++) {
-            const source = imageSources[i];
-            const pngPath = path.join(workDir, `img_${i}.png`);
+        const concurrency = Math.min(8, Math.max(1, Number(process.env.RECONSTRUCT_CONCURRENCY || process.env.UPLOAD_CONCURRENCY || 4)));
+        console.log(`🚀 Chạy song song ${concurrency} luồng tải ảnh...`);
 
-            console.log(`\n   [${i + 1}/${imageSources.length}] Đang tải ảnh${Number.isInteger(source.index) ? ` segment ${source.index + 1}` : ''} (${source.source})...`);
+        let nextIndex = 0;
+        let shouldStop = false;
 
-            try {
-                await downloadFile(source.url, pngPath, cookie);
-                const pngSize = fs.statSync(pngPath).size;
-                console.log(`      📦 PNG: ${(pngSize / 1024).toFixed(2)} KB`);
+        const runWorker = async (workerId) => {
+            while (nextIndex < imageSources.length && !shouldStop) {
+                const i = nextIndex++;
+                if (i >= imageSources.length) break;
 
-                const decoded = await decodePngCarrier(pngPath, { jobId: source.expectedJobId || requestedJobId, index: source.index, total: source.total || imageSources.length });
-                if (requestedJobId && decoded.jobId !== requestedJobId) {
-                    console.log(`      ⏭️ Bỏ qua job khác: ${decoded.jobId}`);
-                    continue;
+                const source = imageSources[i];
+                const pngPath = path.join(workDir, `img_${i}.png`);
+
+                console.log(`\n   [Luồng ${workerId}] [${i + 1}/${imageSources.length}] Đang tải ảnh${Number.isInteger(source.index) ? ` segment ${source.index + 1}` : ''} (${source.source})...`);
+
+                try {
+                    await downloadFile(source.url, pngPath, cookie);
+                    const pngSize = fs.statSync(pngPath).size;
+                    console.log(`      📦 PNG: ${(pngSize / 1024).toFixed(2)} KB`);
+
+                    const decoded = await decodePngCarrier(pngPath, { jobId: source.expectedJobId || requestedJobId, index: source.index, total: source.total || imageSources.length });
+                    if (requestedJobId && decoded.jobId !== requestedJobId) {
+                        console.log(`      ⏭️ Bỏ qua job khác: ${decoded.jobId}`);
+                        continue;
+                    }
+
+                    if (!jobs.has(decoded.jobId)) {
+                        jobs.set(decoded.jobId, { jobId: decoded.jobId, total: decoded.total, parts: new Map() });
+                    }
+
+                    const job = jobs.get(decoded.jobId);
+                    if (job.total !== decoded.total) {
+                        throw new Error(`Job ${decoded.jobId} total mismatch (${job.total} != ${decoded.total})`);
+                    }
+                    if (!job.parts.has(decoded.index)) {
+                        const tsPath = path.join(workDir, `${decoded.jobId}_${String(decoded.index).padStart(5, '0')}.ts`);
+                        fs.writeFileSync(tsPath, decoded.payload);
+                        job.parts.set(decoded.index, tsPath);
+                    }
+
+                    console.log(`      ✅ Carrier: luồng=${workerId}, job=${decoded.jobId}, part=${decoded.index + 1}/${decoded.total}, TS=${(decoded.payloadLength / 1024).toFixed(2)} KB`);
+                    if (requestedJobId && job.parts.size === job.total) {
+                        console.log(`      ✅ Đã đủ ${job.total}/${job.total} segment cho job yêu cầu, dừng tải.`);
+                        shouldStop = true;
+                        break;
+                    }
+                } catch (err) {
+                    console.log(`      ❌ Lỗi luồng ${workerId} ở segment ${i + 1}: ${err.message}`);
+                } finally {
+                    try { fs.unlinkSync(pngPath); } catch(e) {}
                 }
-
-                if (!jobs.has(decoded.jobId)) {
-                    jobs.set(decoded.jobId, { jobId: decoded.jobId, total: decoded.total, parts: new Map() });
-                }
-
-                const job = jobs.get(decoded.jobId);
-                if (job.total !== decoded.total) {
-                    throw new Error(`Job ${decoded.jobId} total mismatch (${job.total} != ${decoded.total})`);
-                }
-                if (!job.parts.has(decoded.index)) {
-                    const tsPath = path.join(workDir, `${decoded.jobId}_${String(decoded.index).padStart(5, '0')}.ts`);
-                    fs.writeFileSync(tsPath, decoded.payload);
-                    job.parts.set(decoded.index, tsPath);
-                }
-
-                console.log(`      ✅ Carrier: job=${decoded.jobId}, part=${decoded.index + 1}/${decoded.total}, TS=${(decoded.payloadLength / 1024).toFixed(2)} KB`);
-                if (requestedJobId && job.parts.size === job.total) {
-                    console.log(`      ✅ Đã đủ ${job.total}/${job.total} segment cho job yêu cầu, dừng tải thêm ảnh.`);
-                    break;
-                }
-            } catch (err) {
-                console.log(`      ❌ ${err.message}`);
-            } finally {
-                try { fs.unlinkSync(pngPath); } catch(e) {}
             }
-        }
+        };
+
+        const workers = Array.from({ length: Math.min(concurrency, imageSources.length) }, (_, idx) => runWorker(idx + 1));
+        await Promise.all(workers);
 
         const selectedJob = pickBestJob(jobs);
         if (!selectedJob) {
