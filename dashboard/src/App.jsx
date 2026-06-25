@@ -327,7 +327,7 @@ function normalizeThreadInput(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.floor(number)));
 }
 
-function VideoUploader({ onLog, serverStatus }) {
+function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
   const [file, setFile] = useState(null);
   const [open, setOpen] = useState(false);
   const [browserUploadProgress, setBrowserUploadProgress] = useState(0);
