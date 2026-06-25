@@ -918,9 +918,9 @@ app.post('/api/xbogus/refresh', (req, res) => {
 app.post('/api/config/concurrency', express.json(), async (req, res) => {
   try {
     const { segmentConcurrency, uploadConcurrency, reconstructConcurrency } = req.body;
-    const seg = Math.max(1, Math.min(4, Number(segmentConcurrency || 1)));
-    const up = Math.max(1, Math.min(8, Number(uploadConcurrency || 3)));
-    const rec = Math.max(1, Math.min(8, Number(reconstructConcurrency || 4)));
+    const seg = Math.max(1, Number(segmentConcurrency || 1));
+    const up = Math.max(1, Number(uploadConcurrency || 3));
+    const rec = Math.max(1, Number(reconstructConcurrency || 4));
 
     const envPath = path.join(ROOT, '.env');
     let raw = await fsp.readFile(envPath, 'utf8').catch(() => '');
@@ -974,8 +974,8 @@ app.post('/api/upload', async (req, res) => {
     res.setHeader('Connection', 'keep-alive');
     if (res.flushHeaders) res.flushHeaders();
 
-    const segmentConcurrency = clampHeaderInt(req.headers['x-segment-concurrency'], 1, 1, 4);
-    const uploadConcurrency = clampHeaderInt(req.headers['x-upload-concurrency'], 1, 1, 8);
+    const segmentConcurrency = clampHeaderInt(req.headers['x-segment-concurrency'], 1, 1, 999999);
+    const uploadConcurrency = clampHeaderInt(req.headers['x-upload-concurrency'], 1, 1, 999999);
     const filename = path.basename(jobFile);
 
     // 1. Tạo jobId và đăng ký activeJobs

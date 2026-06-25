@@ -207,7 +207,7 @@ async function main() {
         const cookie = process.env.TIKTOK_COOKIE || '';
         const jobs = new Map();
 
-        const concurrency = Math.min(8, Math.max(1, Number(process.env.RECONSTRUCT_CONCURRENCY || process.env.UPLOAD_CONCURRENCY || 4)));
+        const concurrency = Math.max(1, Number(process.env.RECONSTRUCT_CONCURRENCY || process.env.UPLOAD_CONCURRENCY || 4));
         console.log(`🚀 Chạy song song ${concurrency} luồng tải ảnh...`);
 
         let nextIndex = 0;

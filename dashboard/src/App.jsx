@@ -390,8 +390,8 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
     }
   }, [restoreJobId]);
 
-  const segmentConcurrency = normalizeThreadInput(localStorage.getItem('segment_concurrency') || '1', 1, 1, 4);
-  const uploadConcurrency = normalizeThreadInput(localStorage.getItem('upload_concurrency') || '3', 3, 1, 8);
+  const segmentConcurrency = normalizeThreadInput(localStorage.getItem('segment_concurrency') || '1', 1, 1, 999999);
+  const uploadConcurrency = normalizeThreadInput(localStorage.getItem('upload_concurrency') || '3', 3, 1, 999999);
 
   const appendUploadLog = useCallback((line) => {
     const text = String(line || '').trim();
@@ -907,9 +907,9 @@ function CdnManager() {
     setSavingConcurrency(true);
     setConcurrencySaveState({ tone: 'slate', message: 'Đang lưu cấu hình luồng...' });
     try {
-      const seg = Math.max(1, Math.min(4, Number(segmentConcurrencyInput || 1)));
-      const up = Math.max(1, Math.min(8, Number(uploadConcurrencyInput || 3)));
-      const rec = Math.max(1, Math.min(8, Number(reconstructConcurrencyInput || 4)));
+      const seg = Math.max(1, Number(segmentConcurrencyInput || 1));
+      const up = Math.max(1, Number(uploadConcurrencyInput || 3));
+      const rec = Math.max(1, Number(reconstructConcurrencyInput || 4));
 
       const response = await fetch(`${API}/api/config/concurrency`, {
         method: 'POST',
@@ -992,12 +992,11 @@ function CdnManager() {
           <div className="space-y-4">
             <label className="block space-y-2 text-sm text-zinc-300">
               <span className="flex items-center gap-2 font-medium">
-                <Scissors className="h-4 w-4 text-cyan-300" /> Luồng tách HLS (1-4)
+                <Scissors className="h-4 w-4 text-cyan-300" /> Luồng tách HLS (tối thiểu 1)
               </span>
               <input
                 type="number"
                 min="1"
-                max="4"
                 value={segmentConcurrencyInput}
                 onChange={e => setSegmentConcurrencyInput(e.target.value)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
@@ -1007,12 +1006,11 @@ function CdnManager() {
 
             <label className="block space-y-2 text-sm text-zinc-300">
               <span className="flex items-center gap-2 font-medium">
-                <CloudLightning className="h-4 w-4 text-emerald-300" /> Luồng upload CDN (1-8)
+                <CloudLightning className="h-4 w-4 text-emerald-300" /> Luồng upload CDN (tối thiểu 1)
               </span>
               <input
                 type="number"
                 min="1"
-                max="8"
                 value={uploadConcurrencyInput}
                 onChange={e => setUploadConcurrencyInput(e.target.value)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
@@ -1022,12 +1020,11 @@ function CdnManager() {
 
             <label className="block space-y-2 text-sm text-zinc-300">
               <span className="flex items-center gap-2 font-medium">
-                <Download className="h-4 w-4 text-amber-300" /> Luồng khôi phục / download (1-8)
+                <Download className="h-4 w-4 text-amber-300" /> Luồng khôi phục / download (tối thiểu 1)
               </span>
               <input
                 type="number"
                 min="1"
-                max="8"
                 value={reconstructConcurrencyInput}
                 onChange={e => setReconstructConcurrencyInput(e.target.value)}
                 className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
