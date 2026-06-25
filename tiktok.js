@@ -1,4 +1,12 @@
 // tiktok.js
+if (!process.env.TIKTOK_COOKIE && process.env.CONSUMER_COOKIES_JSON) {
+    try {
+        const parsed = JSON.parse(process.env.CONSUMER_COOKIES_JSON);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+            process.env.TIKTOK_COOKIE = parsed.map(c => `${c.name}=${c.value}`).join('; ');
+        }
+    } catch (e) {}
+}
 const axios = require('axios');
 const { spawn } = require('child_process');
 const { randomBytes } = require('crypto');
