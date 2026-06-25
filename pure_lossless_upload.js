@@ -89,7 +89,7 @@ async function getSTSToken(cookieStr) {
  */
 async function applyUpload(creds, cookieStr) {
   console.log('🏥 Step 2: Đang gửi yêu cầu ApplyUploadInner...');
-  const applyUrl = 'https://www.tiktok.com/top/v1?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=tiktok&FileType=image&IsInner=1&s=yqpl39xuexr&device_platform=web';
+  const applyUrl = 'https://www.tiktok.com/top/v1?Action=ApplyUploadInner&Version=2020-11-19&SpaceName=tiktok_avatar&FileType=image&IsInner=1&s=yqpl39xuexr&device_platform=web';
   const urlObj = new URL(applyUrl);
   
   const now = new Date();
