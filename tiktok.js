@@ -1099,6 +1099,23 @@ class TiktokService {
         manifest.updatedAt = new Date().toISOString();
         await writeJson(manifestPath, manifest);
 
+        // Xóa toàn bộ các file .ts local sau khi hoàn thành upload
+        try {
+            const filesInDir = await fsp.readdir(jobPublicDir);
+            let deletedCount = 0;
+            for (const file of filesInDir) {
+                if (file.endsWith('.ts')) {
+                    await fsp.unlink(path.join(jobPublicDir, file));
+                    deletedCount++;
+                }
+            }
+            if (deletedCount > 0) {
+                console.log(`   🧹 Đã dọn dẹp ${deletedCount} file segment (.ts) cục bộ thành công.`);
+            }
+        } catch (err) {
+            console.log(`   ⚠️ Lỗi dọn dẹp segment cục bộ: ${err.message}`);
+        }
+
             return {
                 jobId,
                 playlistPath,
