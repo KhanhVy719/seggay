@@ -48,6 +48,88 @@ const PORT = Number(process.env.PORT || 3000);
 const { v4: uuidv4 } = require('uuid');
 
 const activeJobs = new Map();
+const activeReconstructs = new Map();
+
+function startReconstruction(jobId) {
+  if (activeReconstructs.has(jobId)) {
+    return activeReconstructs.get(jobId);
+  }
+
+  const outputDir = path.join(ROOT, 'tmp_reconstruct');
+  const outputPath = path.join(outputDir, `${jobId}.mp4`);
+  
+  const state = {
+    status: 'processing',
+    percent: 0,
+    message: 'Bắt đầu quá trình khôi phục...',
+    outputPath,
+    error: null
+  };
+  activeReconstructs.set(jobId, state);
+
+  fsp.mkdir(outputDir, { recursive: true }).then(() => {
+    const child = spawn(process.execPath, [path.join(ROOT, 'decoded.js'), outputPath, jobId], {
+      cwd: ROOT,
+      env: { ...process.env, TIKTOK_DECODE_JOB_ID: jobId },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    let buffer = '';
+
+    child.stdout.on('data', chunk => {
+      buffer += chunk.toString();
+      const parts = buffer.split(/[\r\n]+/);
+      buffer = parts.pop();
+      
+      for (const line of parts) {
+        if (!line.trim()) continue;
+        console.log(`[Reconstruct: ${jobId}] ${line}`);
+
+        const matchPart = line.match(/\[(\d+)\/(\d+)\]/);
+        if (matchPart) {
+          const current = parseInt(matchPart[1], 10);
+          const total = parseInt(matchPart[2], 10);
+          state.percent = Math.round((current / (total + 1)) * 95);
+          state.message = line.trim();
+        }
+        
+        if (line.includes('Đang ghép')) {
+          state.percent = 96;
+          state.message = 'Đang ghép các phân đoạn video (FFmpeg)...';
+        }
+      }
+    });
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString();
+    });
+
+    child.on('close', code => {
+      if (code === 0) {
+        state.status = 'complete';
+        state.percent = 100;
+        state.message = 'Khôi phục hoàn thành!';
+      } else {
+        state.status = 'failed';
+        state.error = stderr.trim() || `decoded.js exited with code ${code}`;
+        state.message = `Lỗi: ${state.error}`;
+      }
+    });
+    
+    child.on('error', err => {
+      state.status = 'failed';
+      state.error = err.message;
+      state.message = `Lỗi: ${err.message}`;
+    });
+  }).catch(err => {
+    state.status = 'failed';
+    state.error = err.message;
+    state.message = `Lỗi: ${err.message}`;
+  });
+
+  return state;
+}
 
 function sendSseToClient(res, event, data) {
   try {
@@ -1066,20 +1148,38 @@ app.post('/api/jobs/:id/cancel', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/jobs/:id/reconstruct', async (req, res) => {
+app.post('/api/jobs/:id/reconstruct', (req, res) => {
   const jobId = req.params.id;
-  const outputDir = path.join(ROOT, 'tmp_reconstruct');
-  await fsp.mkdir(outputDir, { recursive: true });
-  const outputPath = path.join(outputDir, `${jobId}.mp4`);
+  const state = startReconstruction(jobId);
+  res.json({ ok: true, state: { status: state.status, percent: state.percent, message: state.message } });
+});
 
-  try {
-    await runDecodedCli(jobId, outputPath);
-    res.download(outputPath, `${jobId}.mp4`, async () => {
-      await fsp.unlink(outputPath).catch(() => {});
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+app.get('/api/jobs/:id/reconstruct/status', (req, res) => {
+  const jobId = req.params.id;
+  const state = activeReconstructs.get(jobId);
+  if (!state) {
+    return res.status(404).json({ error: 'Không tìm thấy tiến trình khôi phục cho Job này.' });
   }
+  res.json({
+    status: state.status,
+    percent: state.percent,
+    message: state.message,
+    error: state.error
+  });
+});
+
+app.get('/api/jobs/:id/reconstruct/download', async (req, res) => {
+  const jobId = req.params.id;
+  const state = activeReconstructs.get(jobId);
+  if (!state || state.status !== 'complete') {
+    return res.status(400).send('File khôi phục chưa sẵn sàng hoặc tiến trình bị lỗi.');
+  }
+
+  const outputPath = state.outputPath;
+  res.download(outputPath, `${jobId}.mp4`, async () => {
+    await fsp.unlink(outputPath).catch(() => {});
+    activeReconstructs.delete(jobId);
+  });
 });
 
 const dashboardIndex = path.join(DASHBOARD_DIST, 'index.html');

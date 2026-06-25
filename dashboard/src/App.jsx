@@ -1016,6 +1016,7 @@ function JobHistory({ onPlay, onViewProgress }) {
   const [busy, setBusy] = useState({});
   const [openMenu, setOpenMenu] = useState(null);
   const [copyNotice, setCopyNotice] = useState('');
+  const [reconstructState, setReconstructState] = useState({});
 
   async function refresh() {
     const res = await fetch(`${API}/api/jobs`);
@@ -1051,18 +1052,64 @@ function JobHistory({ onPlay, onViewProgress }) {
   async function reconstruct(jobId) {
     setBusy(prev => ({ ...prev, [jobId]: 'reconstruct' }));
     try {
-      const res = await fetch(`${API}/api/jobs/${jobId}/reconstruct`);
-      if (!res.ok) throw new Error('reconstruct failed');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      const startRes = await fetch(`${API}/api/jobs/${jobId}/reconstruct`, { method: 'POST' });
+      if (!startRes.ok) throw new Error('Không thể khởi động tiến trình khôi phục');
+
+      await new Promise((resolve, reject) => {
+        const intervalId = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`${API}/api/jobs/${jobId}/reconstruct/status`);
+            if (!statusRes.ok) {
+              clearInterval(intervalId);
+              reject(new Error('Lỗi truy vấn tiến trình'));
+              return;
+            }
+            const data = await statusRes.json();
+
+            setReconstructState(prev => ({
+              ...prev,
+              [jobId]: {
+                status: data.status,
+                percent: data.percent,
+                message: data.message,
+                error: data.error
+              }
+            }));
+
+            if (data.status === 'complete') {
+              clearInterval(intervalId);
+              resolve();
+            } else if (data.status === 'failed') {
+              clearInterval(intervalId);
+              reject(new Error(data.error || 'Khôi phục thất bại'));
+            }
+          } catch (err) {
+            clearInterval(intervalId);
+            reject(err);
+          }
+        }, 1500);
+      });
+
+      const downloadUrl = `${API}/api/jobs/${jobId}/reconstruct/download`;
       const a = document.createElement('a');
-      a.href = url;
+      a.href = downloadUrl;
       a.download = `${jobId}.mp4`;
+      document.body.appendChild(a);
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      document.body.removeChild(a);
+
+    } catch (err) {
+      alert(`Khôi phục Video thất bại: ${err.message}`);
     } finally {
       setBusy(prev => ({ ...prev, [jobId]: null }));
       setOpenMenu(null);
+      setTimeout(() => {
+        setReconstructState(prev => {
+          const next = { ...prev };
+          delete next[jobId];
+          return next;
+        });
+      }, 5000);
     }
   }
 
@@ -1133,6 +1180,15 @@ function JobHistory({ onPlay, onViewProgress }) {
                         <span className="text-cyan-400 font-medium">Đang xử lý ({job.percent}%)</span>
                         <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-800">
                           <div className="h-full bg-cyan-400 transition-all duration-300" style={{ width: `${job.percent}%` }} />
+                        </div>
+                      </div>
+                    ) : reconstructState[job.jobId] && reconstructState[job.jobId].status === 'processing' ? (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-amber-400 font-medium" title={reconstructState[job.jobId].message}>
+                          Đang khôi phục ({reconstructState[job.jobId].percent}%)
+                        </span>
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-800">
+                          <div className="h-full bg-amber-400 transition-all duration-300" style={{ width: `${reconstructState[job.jobId].percent}%` }} />
                         </div>
                       </div>
                     ) : job.status === 'cancelled' ? (
