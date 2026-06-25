@@ -853,6 +853,7 @@ app.get('/api/server/status', (req, res) => {
     concurrency: {
       segmentConcurrency: Number(process.env.SEGMENT_CONCURRENCY || 1),
       uploadConcurrency: Number(process.env.UPLOAD_CONCURRENCY || 3),
+      reconstructConcurrency: Number(process.env.RECONSTRUCT_CONCURRENCY || 4),
     }
   });
 });
@@ -916,9 +917,10 @@ app.post('/api/xbogus/refresh', (req, res) => {
 
 app.post('/api/config/concurrency', express.json(), async (req, res) => {
   try {
-    const { segmentConcurrency, uploadConcurrency } = req.body;
+    const { segmentConcurrency, uploadConcurrency, reconstructConcurrency } = req.body;
     const seg = Math.max(1, Math.min(4, Number(segmentConcurrency || 1)));
     const up = Math.max(1, Math.min(8, Number(uploadConcurrency || 3)));
+    const rec = Math.max(1, Math.min(8, Number(reconstructConcurrency || 4)));
 
     const envPath = path.join(ROOT, '.env');
     let raw = await fsp.readFile(envPath, 'utf8').catch(() => '');
@@ -939,11 +941,20 @@ app.post('/api/config/concurrency', express.json(), async (req, res) => {
       raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineUp}\n`;
     }
 
+    // Cập nhật hoặc thêm RECONSTRUCT_CONCURRENCY
+    const lineRec = `RECONSTRUCT_CONCURRENCY=${rec}`;
+    if (/^RECONSTRUCT_CONCURRENCY=.*$/m.test(raw)) {
+      raw = raw.replace(/^RECONSTRUCT_CONCURRENCY=.*$/m, lineRec);
+    } else {
+      raw = `${raw}${raw.endsWith('\n') || !raw ? '' : '\n'}${lineRec}\n`;
+    }
+
     await fsp.writeFile(envPath, raw, 'utf8');
     process.env.SEGMENT_CONCURRENCY = String(seg);
     process.env.UPLOAD_CONCURRENCY = String(up);
+    process.env.RECONSTRUCT_CONCURRENCY = String(rec);
 
-    res.json({ ok: true, segmentConcurrency: seg, uploadConcurrency: up });
+    res.json({ ok: true, segmentConcurrency: seg, uploadConcurrency: up, reconstructConcurrency: rec });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

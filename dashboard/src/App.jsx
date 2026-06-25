@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare
+  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare, Settings
 } from 'lucide-react';
 
 const API = '';
@@ -48,7 +48,7 @@ function formatBytes(bytes) {
 const navItems = [
   { id: 'home', label: 'Tổng quan', icon: Activity },
   { id: 'upload', label: 'Tải video', icon: UploadCloud },
-  { id: 'cdn', label: 'Kho CDN', icon: Globe },
+  { id: 'cdn', label: 'Cài đặt', icon: Settings },
   { id: 'jobs', label: 'Lịch sử', icon: History },
   { id: 'player', label: 'Trình phát', icon: PlayCircle },
 ];
@@ -329,15 +329,12 @@ function normalizeThreadInput(value, fallback, min, max) {
 
 function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
   const [file, setFile] = useState(null);
-  const [open, setOpen] = useState(false);
   const [browserUploadProgress, setBrowserUploadProgress] = useState(0);
   const [progress, setProgress] = useState(0);
   const [step, setStep] = useState('idle');
   const [uploading, setUploading] = useState(false);
   const [share, setShare] = useState(null);
   const [segments, setSegments] = useState({ current: 0, total: 0, uploaded: 0, phasePercent: 0, duration: 0, file: '' });
-  const [segmentConcurrencyInput, setSegmentConcurrencyInput] = useState(() => localStorage.getItem('segment_concurrency') || '1');
-  const [uploadConcurrencyInput, setUploadConcurrencyInput] = useState(() => localStorage.getItem('upload_concurrency') || '3');
   const [uploadLog, setUploadLog] = useState([]);
   const inputRef = useRef(null);
   const xhrRef = useRef(null);
@@ -393,45 +390,8 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
     }
   }, [restoreJobId]);
 
-  useEffect(() => {
-    if (!localStorage.getItem('segment_concurrency') && serverStatus?.concurrency?.segmentConcurrency) {
-      setSegmentConcurrencyInput(String(serverStatus.concurrency.segmentConcurrency));
-    }
-    if (!localStorage.getItem('upload_concurrency') && serverStatus?.concurrency?.uploadConcurrency) {
-      setUploadConcurrencyInput(String(serverStatus.concurrency.uploadConcurrency));
-    }
-  }, [serverStatus]);
-
-  const saveConcurrencySettings = async () => {
-    try {
-      const response = await fetch('/api/config/concurrency', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          segmentConcurrency,
-          uploadConcurrency,
-        }),
-      });
-      const data = await response.json();
-      if (data.ok) {
-        localStorage.setItem('segment_concurrency', String(data.segmentConcurrency));
-        localStorage.setItem('upload_concurrency', String(data.uploadConcurrency));
-        appendUploadLog(`[Cấu hình] Đã lưu số luồng: tách HLS ${data.segmentConcurrency} luồng · upload CDN ${data.uploadConcurrency} luồng`);
-        alert(`Đã lưu cấu hình luồng thành công!\n- Luồng tách: ${data.segmentConcurrency}\n- Luồng upload: ${data.uploadConcurrency}`);
-      } else {
-        throw new Error(data.error || 'Lỗi không xác định');
-      }
-    } catch (err) {
-      appendUploadLog(`[Lỗi] Không thể lưu cấu hình luồng: ${err.message}`);
-      localStorage.setItem('segment_concurrency', String(segmentConcurrency));
-      localStorage.setItem('upload_concurrency', String(uploadConcurrency));
-      alert(`Đã lưu tạm cấu hình luồng vào trình duyệt (Lỗi lưu server: ${err.message})`);
-    }
-  };
-  const segmentConcurrency = normalizeThreadInput(segmentConcurrencyInput || '1', 1, 1, 4);
-  const uploadConcurrency = normalizeThreadInput(uploadConcurrencyInput || '3', 3, 1, 8);
+  const segmentConcurrency = normalizeThreadInput(localStorage.getItem('segment_concurrency') || '1', 1, 1, 4);
+  const uploadConcurrency = normalizeThreadInput(localStorage.getItem('upload_concurrency') || '3', 3, 1, 8);
 
   const appendUploadLog = useCallback((line) => {
     const text = String(line || '').trim();
@@ -574,18 +534,6 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
   ];
 
   const carrierLabels = ['Chiều rộng canvas', 'Chiều cao canvas', 'Mật độ bit', 'Magic Header'];
-  const handleSegmentConcurrencyChange = event => {
-    setSegmentConcurrencyInput(event.target.value);
-  };
-  const handleUploadConcurrencyChange = event => {
-    setUploadConcurrencyInput(event.target.value);
-  };
-  const handleSegmentConcurrencyBlur = () => {
-    setSegmentConcurrencyInput(String(segmentConcurrency));
-  };
-  const handleUploadConcurrencyBlur = () => {
-    setUploadConcurrencyInput(String(uploadConcurrency));
-  };
 
   return (
     <div className="space-y-6">
@@ -620,33 +568,7 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
             {uploading ? 'Đang upload...' : 'Tải lên'}
           </Button>
           {uploading ? <Button variant="ghost" onClick={() => xhrRef.current?.abort()}>Hủy upload</Button> : null}
-          <Button variant="ghost" onClick={() => setOpen(v => !v)}>{open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}Cấu hình Carrier</Button>
         </div>
-
-        {open ? (
-          <div className="mt-4 space-y-4 rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="space-y-2 text-sm text-zinc-300">
-                <span className="flex items-center gap-2"><Scissors className="h-4 w-4 text-cyan-300" />Luồng tách HLS (1-4)</span>
-                <input type="number" min="1" max="4" value={segmentConcurrencyInput} onChange={handleSegmentConcurrencyChange} onBlur={handleSegmentConcurrencyBlur} onFocus={e => e.target.select()} className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono outline-none focus:ring-2 focus:ring-cyan-500/60" />
-                <span className="block text-xs text-zinc-500">Dùng cho FFmpeg -threads, chỉ tự ép 1-4 khi rời ô hoặc bắt đầu upload.</span>
-              </label>
-              <label className="space-y-2 text-sm text-zinc-300">
-                <span className="flex items-center gap-2"><CloudLightning className="h-4 w-4 text-emerald-300" />Luồng upload CDN (1-8)</span>
-                <input type="number" min="1" max="8" value={uploadConcurrencyInput} onChange={handleUploadConcurrencyChange} onBlur={handleUploadConcurrencyBlur} onFocus={e => e.target.select()} className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono outline-none focus:ring-2 focus:ring-cyan-500/60" />
-                <span className="block text-xs text-zinc-500">Upload song song các segment carrier lên TikTok CDN, chỉ tự ép 1-8 khi rời ô hoặc bắt đầu upload.</span>
-              </label>
-            </div>
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={saveConcurrencySettings}
-                className="flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/60"
-              >
-                <Save className="h-4 w-4" /> Lưu cấu hình luồng
-              </button>
-            </div>
-          </div>
-        ) : null}
 
         <div className="mt-5 space-y-3">
           <div className="flex items-center justify-between text-sm text-zinc-400"><span>{step}</span><span className="font-mono text-cyan-200">{progress}%</span></div>
@@ -908,6 +830,43 @@ function CdnManager() {
   const [saveState, setSaveState] = useState({ tone: 'slate', message: 'Chưa lưu cookie trong phiên này.' });
   const [health, setHealth] = useState(null);
 
+  const [segmentConcurrencyInput, setSegmentConcurrencyInput] = useState(() => localStorage.getItem('segment_concurrency') || '1');
+  const [uploadConcurrencyInput, setUploadConcurrencyInput] = useState(() => localStorage.getItem('upload_concurrency') || '3');
+  const [reconstructConcurrencyInput, setReconstructConcurrencyInput] = useState(() => localStorage.getItem('reconstruct_concurrency') || '4');
+  const [savingConcurrency, setSavingConcurrency] = useState(false);
+  const [concurrencySaveState, setConcurrencySaveState] = useState({ tone: 'slate', message: 'Chưa lưu cấu hình luồng.' });
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const res = await fetch(`${API}/api/server/status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.concurrency) {
+            setSegmentConcurrencyInput(String(data.concurrency.segmentConcurrency || 1));
+            setUploadConcurrencyInput(String(data.concurrency.uploadConcurrency || 3));
+            setReconstructConcurrencyInput(String(data.concurrency.reconstructConcurrency || 4));
+            
+            localStorage.setItem('segment_concurrency', String(data.concurrency.segmentConcurrency || 1));
+            localStorage.setItem('upload_concurrency', String(data.concurrency.uploadConcurrency || 3));
+            localStorage.setItem('reconstruct_concurrency', String(data.concurrency.reconstructConcurrency || 4));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load server config', err);
+      }
+    }
+    loadConfig();
+    
+    async function getCookieHealth() {
+      try {
+        const res = await fetch(`${API}/api/cookies/health`, { cache: 'no-store' });
+        if (res.ok) setHealth(await res.json());
+      } catch (err) {}
+    }
+    getCookieHealth();
+  }, []);
+
   function normalizeCookiesForSave() {
     return parseCookieInput(cookies);
   }
@@ -944,9 +903,47 @@ function CdnManager() {
     }
   }
 
+  async function saveConcurrency() {
+    setSavingConcurrency(true);
+    setConcurrencySaveState({ tone: 'slate', message: 'Đang lưu cấu hình luồng...' });
+    try {
+      const seg = Math.max(1, Math.min(4, Number(segmentConcurrencyInput || 1)));
+      const up = Math.max(1, Math.min(8, Number(uploadConcurrencyInput || 3)));
+      const rec = Math.max(1, Math.min(8, Number(reconstructConcurrencyInput || 4)));
+
+      const response = await fetch(`${API}/api/config/concurrency`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          segmentConcurrency: seg,
+          uploadConcurrency: up,
+          reconstructConcurrency: rec,
+        }),
+      });
+      const data = await response.json();
+      if (data.ok) {
+        localStorage.setItem('segment_concurrency', String(data.segmentConcurrency));
+        localStorage.setItem('upload_concurrency', String(data.uploadConcurrency));
+        localStorage.setItem('reconstruct_concurrency', String(data.reconstructConcurrency));
+        setSegmentConcurrencyInput(String(data.segmentConcurrency));
+        setUploadConcurrencyInput(String(data.uploadConcurrency));
+        setReconstructConcurrencyInput(String(data.reconstructConcurrency));
+        setConcurrencySaveState({ tone: 'green', message: `Đã lưu: Tách ${data.segmentConcurrency} · Upload ${data.uploadConcurrency} · Khôi phục ${data.reconstructConcurrency}` });
+      } else {
+        throw new Error(data.error || 'Lỗi không xác định');
+      }
+    } catch (err) {
+      setConcurrencySaveState({ tone: 'red', message: `Lưu luồng lỗi: ${err.message}` });
+    } finally {
+      setSavingConcurrency(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <SectionTitle title="CDN & Phiên TikTok" subtitle="Quản lý cookie đăng nhập, upload .ts, nhật ký rewrite đường dẫn." />
+      <SectionTitle title="Cài đặt" subtitle="Cấu hình Cookie đăng nhập và số luồng xử lý." />
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -987,26 +984,72 @@ function CdnManager() {
             </div>
           ) : null}
         </Card>
+
         <Card className="p-5">
-          <div className="text-sm text-zinc-400">Khu tải .ts</div>
-          <div className="mt-4 rounded-xl border-2 border-dashed border-zinc-800 bg-zinc-950/60 p-8 text-center text-zinc-400">
-            <FolderSync className="mx-auto h-10 w-10" />
-            <div className="mt-3">Thả file .ts → encode PNG → đẩy CDN</div>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="text-sm text-zinc-400">Cấu hình luồng xử lý (Concurrency)</div>
+          </div>
+          <div className="space-y-4">
+            <label className="block space-y-2 text-sm text-zinc-300">
+              <span className="flex items-center gap-2 font-medium">
+                <Scissors className="h-4 w-4 text-cyan-300" /> Luồng tách HLS (1-4)
+              </span>
+              <input
+                type="number"
+                min="1"
+                max="4"
+                value={segmentConcurrencyInput}
+                onChange={e => setSegmentConcurrencyInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
+              />
+              <span className="block text-xs text-zinc-500">Số luồng phân mảnh video đồng thời qua FFmpeg.</span>
+            </label>
+
+            <label className="block space-y-2 text-sm text-zinc-300">
+              <span className="flex items-center gap-2 font-medium">
+                <CloudLightning className="h-4 w-4 text-emerald-300" /> Luồng upload CDN (1-8)
+              </span>
+              <input
+                type="number"
+                min="1"
+                max="8"
+                value={uploadConcurrencyInput}
+                onChange={e => setUploadConcurrencyInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
+              />
+              <span className="block text-xs text-zinc-500">Số luồng upload các mảnh ảnh carrier lên TikTok CDN song song.</span>
+            </label>
+
+            <label className="block space-y-2 text-sm text-zinc-300">
+              <span className="flex items-center gap-2 font-medium">
+                <Download className="h-4 w-4 text-amber-300" /> Luồng khôi phục / download (1-8)
+              </span>
+              <input
+                type="number"
+                min="1"
+                max="8"
+                value={reconstructConcurrencyInput}
+                onChange={e => setReconstructConcurrencyInput(e.target.value)}
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
+              />
+              <span className="block text-xs text-zinc-500">Số luồng tải ảnh carrier đồng thời về máy khi giải mã khôi phục video.</span>
+            </label>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-zinc-300">
+              <Badge tone={concurrencySaveState.tone}>
+                {concurrencySaveState.tone === 'green' ? 'Đã lưu' : concurrencySaveState.tone === 'red' ? 'Lỗi' : 'Trạng thái'}
+              </Badge>
+              <span className="ml-2">{concurrencySaveState.message}</span>
+            </div>
+            <Button variant="accent" onClick={saveConcurrency} disabled={savingConcurrency}>
+              {savingConcurrency ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Lưu cấu hình
+            </Button>
           </div>
         </Card>
       </div>
-      <Card className="overflow-hidden">
-        <div className="border-b border-zinc-800 px-5 py-4 text-sm text-zinc-400">Nhật ký rewrite đường dẫn</div>
-        <table className="w-full text-left text-sm">
-          <thead className="bg-zinc-950 text-zinc-500"><tr><th className="px-5 py-3">Gốc</th><th className="px-5 py-3">Đã đổi</th><th className="px-5 py-3">Trạng thái</th></tr></thead>
-          <tbody>
-            {[
-              ['p16-va.tiktokcdn.com', 'p16-sg.tiktokcdn.com', 'Proxy'],
-              ['p16-sign-va.tiktokcdn.com', 'p16-sign-sg.tiktokcdn.com', 'Ký'],
-            ].map(([a, b, c]) => <tr key={a} className="border-t border-zinc-800"><td className="px-5 py-3">{a}</td><td className="px-5 py-3">{b}</td><td className="px-5 py-3"><Badge tone="blue">{c}</Badge></td></tr>)}
-          </tbody>
-        </table>
-      </Card>
     </div>
   );
 }
@@ -1378,6 +1421,34 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [restoreJobId, setRestoreJobId] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState(['server đã sẵn sàng tại /dashboard', 'pipeline tải lên đang chờ']);
+  const [status, setStatus] = useState(null);
+
+  useEffect(() => {
+    async function getStatus() {
+      try {
+        const res = await fetch(`${API}/api/server/status`);
+        if (res.ok) {
+          const data = await res.json();
+          setStatus(data);
+          if (data.concurrency) {
+            if (!localStorage.getItem('segment_concurrency')) {
+              localStorage.setItem('segment_concurrency', String(data.concurrency.segmentConcurrency));
+            }
+            if (!localStorage.getItem('upload_concurrency')) {
+              localStorage.setItem('upload_concurrency', String(data.concurrency.uploadConcurrency));
+            }
+            if (!localStorage.getItem('reconstruct_concurrency')) {
+              localStorage.setItem('reconstruct_concurrency', String(data.concurrency.reconstructConcurrency));
+            }
+          }
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    getStatus();
+  }, []);
+
   const appendTerminalLog = useCallback((line) => {
     const stamped = `[${new Date().toLocaleTimeString('vi-VN')}] ${line}`;
     setTerminalLogs(prev => [stamped, ...prev].slice(0, 160));
