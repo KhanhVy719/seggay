@@ -1038,6 +1038,13 @@ function JobHistory({ onPlay, onViewProgress }) {
     return () => clearInterval(intervalId);
   }, [jobs]);
 
+  useEffect(() => {
+    if (openMenu === null) return;
+    const handleClose = () => setOpenMenu(null);
+    document.addEventListener('click', handleClose);
+    return () => document.removeEventListener('click', handleClose);
+  }, [openMenu]);
+
   async function remove(jobId) {
     setBusy(prev => ({ ...prev, [jobId]: 'delete' }));
     try {
@@ -1204,14 +1211,17 @@ function JobHistory({ onPlay, onViewProgress }) {
                       <Button
                         variant="ghost"
                         className="h-9 w-9 justify-center px-0"
-                        onClick={() => setOpenMenu(openMenu === job.jobId ? null : job.jobId)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenu(openMenu === job.jobId ? null : job.jobId);
+                        }}
                         disabled={Boolean(state)}
                         aria-label="Mở menu thao tác job"
                       >
                         {state === 'reconstruct' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
                       </Button>
                       {openMenu === job.jobId ? (
-                        <div className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-zinc-800 bg-zinc-950/95 p-2 shadow-2xl shadow-black/50 ring-1 ring-white/5 backdrop-blur">
+                        <div onClick={(e) => e.stopPropagation()} className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-zinc-800 bg-zinc-950/95 p-2 shadow-2xl shadow-black/50 ring-1 ring-white/5 backdrop-blur">
                           <button onClick={() => { onPlay?.(job); setOpenMenu(null); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-cyan-200 transition-colors hover:bg-cyan-500/10 hover:text-cyan-100 focus:bg-cyan-500/10 focus:outline-none">
                             <PlayCircle className="h-4 w-4" />Phát bằng embed
                           </button>
