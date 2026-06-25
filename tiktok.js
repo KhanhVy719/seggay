@@ -711,7 +711,7 @@ class TiktokService {
         };
         policy.transcode = shouldTranscode ? buildTranscodeOptions(metadata, policy, policy.selectedSegmentDuration) : null;
         let seg = policy.selectedSegmentDuration;
-        const jobId = uuidv4();
+        const jobId = metadata.jobId || uuidv4();
         const config = this.config;
 
         const now = new Date();
@@ -741,6 +741,9 @@ class TiktokService {
         };
 
         const runFfmpeg = (duration, attempt, type = 'default') => new Promise((resolve, reject) => {
+            if (metadata.isAborted && metadata.isAborted()) {
+                return reject(new Error('Job aborted by user'));
+            }
             const isOrig = type === 'original';
             const isTrans = type === 'transcoded';
             const actualShouldTranscode = isTrans ? true : (isOrig ? false : shouldTranscode);
@@ -799,9 +802,16 @@ class TiktokService {
                 outPlaylistPath
             );
             const ps = spawn(ffmpegPath, args, { windowsHide: true });
+            if (metadata.onFfmpegSpawn) {
+                metadata.onFfmpegSpawn(ps);
+            }
             let stderr = '';
 
             ps.stderr.on('data', (d) => {
+                if (metadata.isAborted && metadata.isAborted()) {
+                    ps.kill('SIGKILL');
+                    return reject(new Error('Job aborted by user'));
+                }
                 const str = d.toString();
                 stderr += str;
                 if (onProgress) {
@@ -978,6 +988,9 @@ class TiktokService {
             let nextIndex = 0;
             const runUploadWorker = async (workerId) => {
                 while (nextIndex < items.length) {
+                    if (metadata.isAborted && metadata.isAborted()) {
+                        throw new Error('Job aborted by user');
+                    }
                     const item = items[nextIndex++];
                     const i = item.index;
                     const type = item.type;

@@ -343,6 +343,57 @@ function VideoUploader({ onLog, serverStatus }) {
   const xhrRef = useRef(null);
 
   useEffect(() => {
+    if (restoreJobId) {
+      setUploading(true);
+      setProgress(0);
+      setStep('Đang kết nối lại tiến trình xử lý ngầm...');
+      setUploadLog([]);
+      setBrowserUploadProgress(100);
+
+      const eventSource = new EventSource(`/api/jobs/${restoreJobId}/events`);
+      
+      const onProgress = (e) => {
+        handleSseChunk(`event: progress\ndata: ${e.data}\n\n`);
+      };
+
+      const onMeta = (e) => {
+        handleSseChunk(`event: meta\ndata: ${e.data}\n\n`);
+      };
+
+      const onDone = (e) => {
+        handleSseChunk(`event: done\ndata: ${e.data}\n\n`);
+        eventSource.close();
+        onClearRestore?.();
+      };
+
+      const onError = (e) => {
+        handleSseChunk(`event: error\ndata: ${e.data}\n\n`);
+        eventSource.close();
+        onClearRestore?.();
+      };
+
+      eventSource.addEventListener('progress', onProgress);
+      eventSource.addEventListener('meta', onMeta);
+      eventSource.addEventListener('done', onDone);
+      eventSource.addEventListener('error', onError);
+
+      xhrRef.current = {
+        abort: () => {
+          eventSource.close();
+          fetch(`/api/jobs/${restoreJobId}/cancel`, { method: 'POST' }).catch(() => {});
+          setUploading(false);
+          setStep('Đã hủy kết nối và tiến trình');
+          onClearRestore?.();
+        }
+      };
+
+      return () => {
+        eventSource.close();
+      };
+    }
+  }, [restoreJobId]);
+
+  useEffect(() => {
     if (!localStorage.getItem('segment_concurrency') && serverStatus?.concurrency?.segmentConcurrency) {
       setSegmentConcurrencyInput(String(serverStatus.concurrency.segmentConcurrency));
     }
@@ -960,7 +1011,7 @@ function CdnManager() {
   );
 }
 
-function JobHistory({ onPlay }) {
+function JobHistory({ onPlay, onViewProgress }) {
   const [jobs, setJobs] = useState([]);
   const [busy, setBusy] = useState({});
   const [openMenu, setOpenMenu] = useState(null);
@@ -1004,6 +1055,17 @@ function JobHistory({ onPlay }) {
     }
   }
 
+  async function cancelJob(jobId) {
+    setBusy(prev => ({ ...prev, [jobId]: 'cancel' }));
+    try {
+      await fetch(`${API}/api/jobs/${jobId}/cancel`, { method: 'POST' });
+      await refresh();
+    } finally {
+      setBusy(prev => ({ ...prev, [jobId]: null }));
+      setOpenMenu(null);
+    }
+  }
+
   async function copyText(value, label) {
     const text = String(value || '');
     if (!text) return;
@@ -1039,10 +1101,37 @@ function JobHistory({ onPlay }) {
               const links = jobLinks(job.jobId);
               return (
                 <tr key={job.jobId} className="border-t border-zinc-800">
-                  <td className="px-5 py-3 font-mono text-xs text-zinc-300">{job.jobId}</td>
+                  <td className="px-5 py-3 font-mono text-xs text-zinc-300">
+                    {job.status === 'processing' ? (
+                      <button
+                        onClick={() => onViewProgress?.(job.jobId)}
+                        className="flex items-center gap-1 font-mono text-xs text-cyan-400 hover:underline hover:text-cyan-300 focus:outline-none"
+                        title="Bấm để xem tiến trình chi tiết"
+                      >
+                        {job.jobId} (Xem tiến độ)
+                      </button>
+                    ) : (
+                      job.jobId
+                    )}
+                  </td>
                   <td className="px-5 py-3 text-zinc-300">{job.createdAt?.slice(0, 10)}</td>
                   <td className="px-5 py-3 text-zinc-300">{formatBytes(getJobSizeBytes(job))}</td>
-                  <td className="px-5 py-3 text-zinc-300">{job.uploaded}/{job.total}</td>
+                  <td className="px-5 py-3 text-zinc-300">
+                    {job.status === 'processing' ? (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-cyan-400 font-medium">Đang xử lý ({job.percent}%)</span>
+                        <div className="h-1.5 w-24 overflow-hidden rounded-full bg-zinc-800">
+                          <div className="h-full bg-cyan-400 transition-all duration-300" style={{ width: `${job.percent}%` }} />
+                        </div>
+                      </div>
+                    ) : job.status === 'cancelled' ? (
+                      <span className="text-red-400 font-medium">Đã hủy</span>
+                    ) : job.status === 'failed' ? (
+                      <span className="text-red-500 font-medium">Lỗi</span>
+                    ) : (
+                      `${job.uploaded}/${job.total}`
+                    )}
+                  </td>
                   <td className={`relative px-5 py-3 ${openMenu === job.jobId ? 'z-50' : 'z-0'}`}>
                     <div className="relative flex justify-end">
                       <Button
@@ -1071,6 +1160,11 @@ function JobHistory({ onPlay }) {
                           <button onClick={() => reconstruct(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800 focus:bg-zinc-800 focus:outline-none">
                             <Download className="h-4 w-4" />Khôi phục Video
                           </button>
+                          {job.status === 'processing' ? (
+                            <button onClick={() => cancelJob(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:bg-red-500/10 focus:outline-none">
+                              <AlertCircle className="h-4 w-4" />Hủy tiến trình
+                            </button>
+                          ) : null}
                           <button onClick={() => remove(job.jobId)} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 focus:bg-red-500/10 focus:outline-none">
                             <Trash2 className="h-4 w-4" />Xóa video đã tải
                           </button>
@@ -1200,6 +1294,7 @@ function TerminalPanel({ logs }) {
 export default function App() {
   const [tab, setTab] = useState('home');
   const [selectedJob, setSelectedJob] = useState(null);
+  const [restoreJobId, setRestoreJobId] = useState(null);
   const [terminalLogs, setTerminalLogs] = useState(['server đã sẵn sàng tại /dashboard', 'pipeline tải lên đang chờ']);
   const appendTerminalLog = useCallback((line) => {
     const stamped = `[${new Date().toLocaleTimeString('vi-VN')}] ${line}`;
@@ -1211,9 +1306,9 @@ export default function App() {
   };
   const views = {
     home: <DashboardHome />,
-    upload: <VideoUploader onLog={appendTerminalLog} serverStatus={status} />,
+    upload: <VideoUploader onLog={appendTerminalLog} serverStatus={status} restoreJobId={restoreJobId} onClearRestore={() => setRestoreJobId(null)} />,
     cdn: <CdnManager />,
-    jobs: <JobHistory onPlay={playJob} />,
+    jobs: <JobHistory onPlay={playJob} onViewProgress={(jobId) => { setRestoreJobId(jobId); setTab('upload'); }} />,
     player: <CarrierPlayer selectedJob={selectedJob} />,
   };
 

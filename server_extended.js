@@ -23,13 +23,135 @@ const originalServer = require('./server');
 const app = originalServer;
 const PORT = Number(process.env.PORT || 3000);
 
-process.on('uncaughtException', err => {
-  console.error('[fatal] uncaughtException:', err && err.stack ? err.stack : err);
-});
+const { v4: uuidv4 } = require('uuid');
 
-process.on('unhandledRejection', err => {
-  console.error('[fatal] unhandledRejection:', err && err.stack ? err.stack : err);
-});
+const activeJobs = new Map();
+
+function sendSseToClient(res, event, data) {
+  try {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  } catch (e) {}
+}
+
+async function writeJson(filePath, data) {
+  await fsp.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+}
+
+async function runBackgroundJob(jobId, jobFile, segmentConcurrency, uploadConcurrency, filename) {
+  const job = activeJobs.get(jobId);
+  if (job) job.jobFile = jobFile;
+
+  try {
+    // 1. Ghi manifest ban đầu
+    const manifestPathJson = manifestPath(jobId);
+    const initialManifest = {
+      version: 4,
+      jobId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      complete: false,
+      status: 'processing',
+      source: {
+        filename,
+      },
+      segments: []
+    };
+    await writeJson(manifestPathJson, initialManifest);
+
+    // 2. Probe video
+    const progressEvent = (event, data) => {
+      const j = activeJobs.get(jobId);
+      if (j) {
+        j.logs.push({ event, data });
+        for (const client of j.sseClients) {
+          sendSseToClient(client, event, data);
+        }
+      }
+    };
+
+    progressEvent('progress', { step: 'probe', percent: 5, message: 'Video probing', segmentConcurrency, uploadConcurrency });
+    const probe = await tiktokService.probeVideo(jobFile);
+    progressEvent('progress', { step: 'probe-complete', percent: 8, message: 'Probe complete', probe });
+
+    const currentJob = activeJobs.get(jobId);
+    if (currentJob && currentJob.status === 'cancelled') return;
+
+    // 3. Chạy processJob
+    const result = await tiktokService.processJob(
+      jobFile,
+      4,
+      probe.duration,
+      (percent, message, details = {}) => {
+        const j = activeJobs.get(jobId);
+        if (j) {
+          j.percent = percent;
+          j.step = details.phase || 'pipeline';
+          j.message = message;
+          j.details = details;
+          
+          const eventData = { step: j.step, percent, message, ...details };
+          progressEvent('progress', eventData);
+        }
+      },
+      { 
+        ...probe,
+        jobId, 
+        source: 'dashboard', 
+        segmentConcurrency, 
+        uploadConcurrency,
+        isAborted: () => {
+          const j = activeJobs.get(jobId);
+          return !j || j.status === 'cancelled';
+        },
+        onFfmpegSpawn: (ps) => {
+          const j = activeJobs.get(jobId);
+          if (j) j.ffmpegProcess = ps;
+        }
+      }
+    );
+
+    const j = activeJobs.get(jobId);
+    if (j) {
+      if (j.status === 'cancelled') return;
+      j.status = 'complete';
+      j.percent = 100;
+      
+      const doneData = {
+        ok: true,
+        jobId,
+        playlistUrl: result.playlistUrl,
+        carrierPlaylistUrl: result.carrierPlaylistUrl,
+        carrierPlayerUrl: result.carrierPlayerUrl,
+        sizing: result.sizing
+      };
+      progressEvent('done', doneData);
+      
+      for (const client of j.sseClients) {
+        client.end();
+      }
+      j.sseClients.clear();
+      setTimeout(() => activeJobs.delete(jobId), 10 * 60 * 1000);
+    }
+  } catch (err) {
+    const j = activeJobs.get(jobId);
+    if (j) {
+      if (j.status === 'cancelled') return;
+      j.status = 'failed';
+      
+      const errData = { ok: false, error: err.message };
+      progressEvent('error', errData);
+      
+      for (const client of j.sseClients) {
+        client.end();
+      }
+      j.sseClients.clear();
+      setTimeout(() => activeJobs.delete(jobId), 10 * 60 * 1000);
+    }
+  } finally {
+    if (jobFile) await fsp.unlink(jobFile).catch(() => {});
+  }
+}
+
 const ROOT = process.cwd();
 const MANIFEST_ROOT = path.join(ROOT, 'upload', 'tiktok', 'manifests');
 const DASHBOARD_DIST = path.join(ROOT, 'dashboard', 'dist');
@@ -728,49 +850,56 @@ app.post('/api/upload', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     if (res.flushHeaders) res.flushHeaders();
+
     const segmentConcurrency = clampHeaderInt(req.headers['x-segment-concurrency'], 1, 1, 4);
     const uploadConcurrency = clampHeaderInt(req.headers['x-upload-concurrency'], 1, 1, 8);
-    sendSse(res, 'meta', {
+    const filename = path.basename(jobFile);
+
+    // 1. Tạo jobId và đăng ký activeJobs
+    const jobId = uuidv4();
+    const jobObj = {
+      jobId,
+      filename,
+      createdAt: new Date().toISOString(),
+      status: 'processing',
+      percent: 0,
+      step: 'upload-complete',
+      message: 'Upload complete, queueing background processing...',
+      details: {},
+      ffmpegProcess: null,
+      logs: [],
+      sseClients: new Set([res])
+    };
+    activeJobs.set(jobId, jobObj);
+
+    // 2. Gửi sự kiện meta ban đầu
+    sendSseToClient(res, 'meta', {
       ok: true,
-      filename: path.basename(jobFile),
+      filename,
       bytes: receivedBytes,
       segmentConcurrency,
       uploadConcurrency,
+      jobId
     });
 
-    const probe = await tiktokService.probeVideo(jobFile);
-    sendSse(res, 'progress', { step: 'probe', percent: 5, message: 'Video probing', probe, segmentConcurrency, uploadConcurrency });
+    // 3. Khởi chạy background job (bất đồng bộ)
+    runBackgroundJob(jobId, jobFile, segmentConcurrency, uploadConcurrency, filename);
 
-    const result = await tiktokService.processJob(
-      jobFile,
-      4,
-      probe.duration,
-      (percent, message, details = {}) => sendSse(res, 'progress', {
-        step: details.phase || 'pipeline',
-        percent,
-        message,
-        ...details,
-      }),
-      { ...probe, source: 'dashboard', segmentConcurrency, uploadConcurrency }
-    );
-
-    sendSse(res, 'done', {
-      ok: true,
-      jobId: result.jobId,
-      playlistUrl: result.playlistUrl,
-      carrierPlaylistUrl: result.carrierPlaylistUrl,
-      carrierPlayerUrl: result.carrierPlayerUrl,
-      sizing: result.sizing,
+    // Lắng nghe đóng connection từ phía client
+    req.on('close', () => {
+      const j = activeJobs.get(jobId);
+      if (j) {
+        j.sseClients.delete(res);
+      }
     });
-    res.end();
+
   } catch (err) {
     if (res.headersSent) {
-      sendSse(res, 'error', { ok: false, error: err.message });
+      sendSseToClient(res, 'error', { ok: false, error: err.message });
       res.end();
     } else {
       res.status(req.aborted ? 499 : 500).json({ ok: false, error: err.message });
     }
-  } finally {
     if (jobFile) await fsp.unlink(jobFile).catch(() => {});
   }
 });
@@ -784,15 +913,29 @@ app.get('/api/jobs', async (req, res) => {
       const jobId = path.basename(file, '.json');
       const manifest = await loadManifest(jobId).catch(() => null);
       if (!manifest) continue;
-      const uploaded = (manifest.segments || []).filter(segment => segment.uploaded && segment.imageUri).length;
+
+      const activeJob = activeJobs.get(jobId);
+      const uploaded = activeJob 
+        ? (activeJob.details?.uploadedSegments || 0)
+        : (manifest.segments || []).filter(segment => segment.uploaded && segment.imageUri).length;
+
+      const total = activeJob
+        ? (activeJob.details?.segmentTotal || 0)
+        : (manifest.segments?.length || 0);
+
+      const percent = activeJob ? activeJob.percent : (manifest.complete ? 100 : 0);
+      const status = activeJob ? activeJob.status : (manifest.status || (manifest.complete ? 'complete' : 'failed'));
+
       const size = getManifestSizeBytes(manifest);
       jobs.push({
         jobId,
         createdAt: manifest.createdAt,
         updatedAt: manifest.updatedAt,
-        total: manifest.segments?.length || 0,
+        total,
         uploaded,
-        complete: Boolean(manifest.complete),
+        complete: activeJob ? false : Boolean(manifest.complete),
+        status,
+        percent,
         size,
         sourceSize: Number(manifest.source?.sizeBytes || 0),
       });
@@ -821,6 +964,76 @@ app.delete('/api/jobs/:id', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/jobs/:id/events', (req, res) => {
+  const jobId = req.params.id;
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  if (res.flushHeaders) res.flushHeaders();
+
+  const job = activeJobs.get(jobId);
+  if (!job) {
+    loadManifest(jobId).then(manifest => {
+      sendSseToClient(res, 'done', { ok: true, jobId, playlistUrl: manifest.source?.playlistPath });
+      res.end();
+    }).catch(err => {
+      sendSseToClient(res, 'error', { ok: false, error: 'Job not found or already finished' });
+      res.end();
+    });
+    return;
+  }
+
+  // Replay logs
+  for (const log of job.logs) {
+    sendSseToClient(res, log.event, log.data);
+  }
+
+  job.sseClients.add(res);
+
+  req.on('close', () => {
+    job.sseClients.delete(res);
+  });
+});
+
+app.post('/api/jobs/:id/cancel', async (req, res) => {
+  const jobId = req.params.id;
+  const job = activeJobs.get(jobId);
+  if (!job) {
+    return res.status(404).json({ ok: false, error: 'Job không tồn tại hoặc đã hoàn thành.' });
+  }
+
+  job.status = 'cancelled';
+
+  if (job.ffmpegProcess) {
+    try {
+      job.ffmpegProcess.kill('SIGKILL');
+      console.log(`[Cancel] Đã kill FFmpeg của job ${jobId}`);
+    } catch (e) {}
+  }
+
+  const cancelData = { ok: false, error: 'Tiến trình bị hủy bởi người dùng' };
+  job.logs.push({ event: 'error', data: cancelData });
+
+  for (const client of job.sseClients) {
+    sendSseToClient(client, 'error', cancelData);
+    client.end();
+  }
+  job.sseClients.clear();
+
+  // Ghi đè manifest
+  const mPath = manifestPath(jobId);
+  loadManifest(jobId).then(async manifest => {
+    manifest.complete = false;
+    manifest.status = 'cancelled';
+    manifest.updatedAt = new Date().toISOString();
+    await writeJson(mPath, manifest);
+  }).catch(() => {});
+
+  activeJobs.delete(jobId);
+  res.json({ ok: true });
 });
 
 app.get('/api/jobs/:id/reconstruct', async (req, res) => {
