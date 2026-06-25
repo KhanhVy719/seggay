@@ -22,6 +22,87 @@ const originalServer = require('./server');
 
 const app = originalServer;
 
+const TOKENS_FILE = path.join(__dirname, 'users_tokens.json');
+
+// Ensure token file exists
+function ensureTokensFile() {
+  if (!fs.existsSync(TOKENS_FILE)) {
+    const defaultData = [
+      {
+        username: 'admin',
+        token: 'tok_admin_default_719',
+        createdAt: new Date().toISOString(),
+        active: true
+      }
+    ];
+    fs.writeFileSync(TOKENS_FILE, JSON.stringify(defaultData, null, 2), 'utf8');
+  }
+}
+
+async function readTokens() {
+  ensureTokensFile();
+  try {
+    const raw = await fsp.readFile(TOKENS_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    return [];
+  }
+}
+
+async function writeTokens(tokens) {
+  await fsp.writeFile(TOKENS_FILE, JSON.stringify(tokens, null, 2), 'utf8');
+}
+
+async function validateToken(tokenStr) {
+  const tokens = await readTokens();
+  return tokens.some(t => t.token === tokenStr && t.active);
+}
+
+// Authentication middleware
+async function authMiddleware(req, res, next) {
+  // Allow index, static dashboard files, player, carrier streams
+  const publicPaths = ['/dashboard', '/player', '/carrier', '/upload', '/favicon.ico'];
+  if (publicPaths.some(p => req.path.startsWith(p)) && !req.path.startsWith('/api/')) {
+    return next();
+  }
+  
+  // Authenticate /api/ routes
+  if (req.path.startsWith('/api/')) {
+    let token = '';
+    const authHeader = req.headers.authorization || req.headers.Authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice(7).trim();
+    } else if (req.query.token) {
+      token = String(req.query.token).trim();
+    }
+    
+    if (!token) {
+      return res.status(401).json({ ok: false, error: 'Thiếu API Token (Authorization: Bearer <token>)' });
+    }
+    
+    const isValid = await validateToken(token);
+    if (!isValid) {
+      return res.status(403).json({ ok: false, error: 'API Token không hợp lệ hoặc đã bị vô hiệu hóa' });
+    }
+  }
+  
+  next();
+}
+
+// Inject authMiddleware at the beginning of the stack to protect routes inherited from server.js
+app.use(authMiddleware);
+if (app._router && Array.isArray(app._router.stack)) {
+  const authLayer = app._router.stack.pop();
+  let insertIndex = 0;
+  for (let i = 0; i < app._router.stack.length; i++) {
+    const name = app._router.stack[i].name;
+    if (name === 'query' || name === 'expressInit') {
+      insertIndex = i + 1;
+    }
+  }
+  app._router.stack.splice(insertIndex, 0, authLayer);
+}
+
 // Clean up original routes registered in server.js that we want to override
 const routerObj = app.router || app._router;
 if (routerObj && Array.isArray(routerObj.stack)) {
@@ -29,19 +110,246 @@ if (routerObj && Array.isArray(routerObj.stack)) {
     if (!layer.route) return true;
     const path = layer.route.path;
     const methods = layer.route.methods || {};
-    const isGetJobs = methods.get && (
+    const shouldRemove = methods.get && (
       path === '/api/jobs' || 
       path === '/api/jobs/:jobId' || 
       path === '/api/jobs/:id' || 
-      path === '/'
+      path === '/' ||
+      path === '/player' ||
+      path === '/embed/player'
     );
-    if (isGetJobs) {
+    if (shouldRemove) {
       console.log(`[Extension] Removing original route handler: GET ${path}`);
       return false;
     }
     return true;
   });
 }
+
+function isValidJobId(jobId) {
+  return /^[a-zA-Z0-9_-]{8,80}$/.test(String(jobId || ''));
+}
+
+function parseSignedUrlExpiry(url) {
+  try {
+    const parsed = new URL(url);
+    const value = parsed.searchParams.get('x-expires') || parsed.searchParams.get('X-Expires') || parsed.searchParams.get('expires') || parsed.searchParams.get('Expires');
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return seconds > 100000000000 ? seconds : seconds * 1000;
+    }
+  } catch (err) {}
+  return null;
+}
+
+function directUrlMeta(url) {
+  const now = Date.now();
+  const expiresAt = parseSignedUrlExpiry(url);
+  const safetyMs = expiresAt ? Math.min(Math.max(60000, Math.floor((expiresAt - now) * 0.1)), 120000) : 120000;
+  return {
+    serverNow: now,
+    expiresAt,
+    refreshAfter: expiresAt ? Math.max(now, expiresAt - safetyMs) : null,
+  };
+}
+
+function sanitizeSegment(manifest, segment, includeDirect) {
+  let publicImageUrl = segment.uploaded && segment.publicImageUrl ? segment.publicImageUrl : '';
+  if (publicImageUrl.includes('p16-va.tiktokcdn.com')) {
+    publicImageUrl = publicImageUrl.replace('p16-va.tiktokcdn.com', 'p16-sg.tiktokcdn.com');
+  }
+  let signedImageUrl = includeDirect && segment.uploaded && segment.resolvedImageUrl ? segment.resolvedImageUrl : '';
+  if (signedImageUrl.includes('p16-va.tiktokcdn.com')) {
+    signedImageUrl = signedImageUrl.replace('p16-va.tiktokcdn.com', 'p16-sg.tiktokcdn.com');
+  } else if (signedImageUrl.includes('p16-sign-va.tiktokcdn.com')) {
+    signedImageUrl = signedImageUrl.replace('p16-sign-va.tiktokcdn.com', 'p16-sign-sg.tiktokcdn.com');
+  }
+  const directMeta = signedImageUrl ? directUrlMeta(signedImageUrl) : {};
+  return {
+    index: segment.index,
+    duration: segment.duration,
+    uploaded: Boolean(segment.uploaded && segment.imageUri),
+    imageUrl: segment.uploaded && segment.imageUri ? `/api/jobs/${encodeURIComponent(manifest.jobId)}/images/${segment.index}` : '',
+    publicImageUrl,
+    directImageUrl: signedImageUrl,
+    expiresAt: directMeta.expiresAt || null,
+    refreshAfter: directMeta.refreshAfter || null,
+    serverNow: directMeta.serverNow || Date.now(),
+    assetVersion: manifest.assetVersion || manifest.jobId,
+    tsBytes: Number(segment.tsBytes || 0),
+    payloadBytes: Number(segment.payloadBytes || 0),
+    carrierBytes: Number(segment.carrierBytes || 0),
+    pngBytes: Number(segment.pngBytes || 0),
+    width: Number(segment.width || 0),
+    height: Number(segment.height || 0),
+    overTarget: Boolean(segment.overTarget),
+    overMax: Boolean(segment.overMax),
+  };
+}
+
+function sanitizeJob(manifest, options = {}) {
+  const uploadedSegments = manifest.segments.filter(segment => segment.uploaded && segment.imageUri);
+  const includeDirect = Boolean(options.includeDirect);
+  const size = getManifestSizeBytes(manifest);
+  return {
+    jobId: manifest.jobId,
+    createdAt: manifest.createdAt,
+    updatedAt: manifest.updatedAt,
+    total: manifest.segments.length,
+    uploaded: uploadedSegments.length,
+    complete: Boolean(manifest.complete) && uploadedSegments.length === manifest.segments.length,
+    size,
+    sourceSize: Number(manifest.source?.sizeBytes || 0),
+    carrierPlaylistUrl: `/carrier/${encodeURIComponent(manifest.jobId)}/master.m3u8`,
+    carrierPlayerUrl: `/player?jobId=${encodeURIComponent(manifest.jobId)}`,
+    directCarrierPlayerUrl: `/player?jobId=${encodeURIComponent(manifest.jobId)}&direct=1&auto=1`,
+    localPlaylistUrl: manifest.source?.playlistPath || '',
+    fallbackEnabled: process.env.ENABLE_SERVER_SEGMENT_FALLBACK === 'true',
+    directEnabled: includeDirect,
+    assetVersion: manifest.assetVersion || manifest.jobId,
+    sizing: manifest.sizing || null,
+    serverNow: Date.now(),
+    segments: manifest.segments.map(segment => sanitizeSegment(manifest, segment, includeDirect)),
+  };
+}
+
+function renderPlayerPage(initial) {
+  const safeInitial = JSON.stringify(initial || {})
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+  const fallbackEnabled = process.env.ENABLE_SERVER_SEGMENT_FALLBACK === 'true';
+  const bodyClass = initial && initial.embed ? ' class="embed-mode"' : '';
+  return `<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok Carrier HLS Player</title>
+    <style>
+        html, body { min-height: 100%; }
+        body { margin: 0; font-family: Arial, sans-serif; background: #111; color: #fff; }
+        main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+        video { width: 100%; max-height: 75vh; background: #000; border-radius: 10px; }
+        input { width: 100%; box-sizing: border-box; padding: 10px; margin: 8px 0 12px; border-radius: 6px; border: 1px solid #555; background: #222; color: #fff; }
+        button { padding: 10px 16px; border: 0; border-radius: 6px; cursor: pointer; margin-right: 8px; }
+        label { display: block; color: #ddd; margin-top: 14px; }
+        .hint { color: #bbb; line-height: 1.5; }
+        .status { color: #78d6ff; white-space: pre-wrap; line-height: 1.45; }
+        .error { color: #ff7676; white-space: pre-wrap; line-height: 1.45; }
+        .telemetry { color: #9cffb1; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; padding: 12px; white-space: pre-wrap; line-height: 1.45; overflow-x: auto; }
+        body.embed-mode { width: 100vw; height: 100vh; min-height: 100vh; overflow: hidden; background: #000; }
+        body.embed-mode main { width: 100%; height: 100vh; max-width: none; margin: 0; padding: 0; display: flex; align-items: center; justify-content: center; }
+        body.embed-mode h1,
+        body.embed-mode .controls-panel,
+        body.embed-mode .hint,
+        body.embed-mode .status,
+        body.embed-mode .telemetry { display: none; }
+        body.embed-mode video { width: 100%; height: 100%; max-height: none; border-radius: 0; object-fit: contain; }
+        body.embed-mode .error { position: absolute; left: 16px; right: 16px; bottom: 16px; margin: 0; padding: 10px 12px; border-radius: 8px; background: rgba(0, 0, 0, 0.72); color: #ff8a8a; z-index: 2; }
+        body.embed-mode .error:empty { display: none; }
+    </style>
+    <script>
+    (function() {
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options = {}) {
+            if (typeof url === 'string' && (url.startsWith('/api/') || url.includes('/api/'))) {
+                const initial = window.__PLAYER_INITIAL__ || {};
+                const query = new URLSearchParams(window.location.search);
+                const token = initial.token || query.get('token') || 'tok_admin_default_719';
+                options.headers = {
+                    ...options.headers,
+                    'Authorization': 'Bearer ' + token
+                };
+            }
+            return originalFetch.call(this, url, options);
+        };
+    })();
+    </script>
+</head>
+<body${bodyClass}>
+<main>
+    <h1>TikTok Carrier HLS Player</h1>
+    <video id="video" controls autoplay muted playsinline></video>
+
+    <section class="controls-panel">
+        <label>Carrier Job ID (phát trực tiếp từ ảnh TikTok carrier)</label>
+        <input id="jobId" placeholder="<jobId>">
+        <button id="loadJob">Load carrier job</button>
+
+        <label>Hoặc M3U8 local/debug</label>
+        <input id="src" placeholder="/upload/<date>/<jobId>/master.m3u8">
+        <button id="loadSrc">Load m3u8</button>
+    </section>
+
+    <p class="hint">Carrier mode: browser tự decode PNG pixel thành TS segment rồi feed vào hls.js. Mở <code>&direct=1&auto=1</code> để ưu tiên CDN TikTok, tự refresh URL, tự chọn profile/mode, dùng IndexedDB cache, sliding-window prefetch, Web Worker decode và fallback proxy/server khi cần.</p>
+    <p id="status" class="status"></p>
+    <p id="error" class="error"></p>
+    <pre id="telemetry" class="telemetry"></pre>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+<script>window.__PLAYER_INITIAL__ = ${safeInitial}; window.__SERVER_SEGMENT_FALLBACK__ = ${JSON.stringify(fallbackEnabled)};</script>
+<script src="/carrier-player.js"></script>
+</body>
+</html>`;
+}
+
+app.get('/embed/player', (req, res) => {
+    const jobId = String(req.query.jobId || '');
+    const token = String(req.query.token || '');
+    if (!isValidJobId(jobId)) {
+        res.status(400).type('text').send('Invalid jobId');
+        return;
+    }
+
+    const tokenParam = token ? `&token=\${encodeURIComponent(token)}` : '';
+    const playerPath = `/player?jobId=\${encodeURIComponent(jobId)}&direct=1&auto=1&embed=1\${tokenParam}`;
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'autoplay=(self), fullscreen=(self), picture-in-picture=(self)');
+    res.type('html').send(`<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TikTok Carrier Embed</title>
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; background: #000; overflow: hidden; }
+        iframe { width: 100%; height: 100%; border: 0; display: block; background: #000; }
+    </style>
+</head>
+<body>
+    <iframe src="\${playerPath}" title="TikTok Carrier Player" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+</body>
+</html>`);
+});
+
+app.get('/player', async (req, res) => {
+    const initial = {
+        src: req.query.src || '',
+        jobId: req.query.jobId || '',
+        direct: req.query.direct === '1',
+        auto: req.query.auto !== '0',
+        embed: req.query.embed === '1',
+        token: req.query.token || '',
+        bootstrapJob: null,
+    };
+
+    try {
+        if (initial.jobId && isValidJobId(initial.jobId)) {
+            const manifest = await loadManifest(initial.jobId);
+            initial.bootstrapJob = sanitizeJob(manifest, { includeDirect: initial.direct });
+        }
+    } catch (err) {
+        initial.bootstrapError = err.message;
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.type('html').send(renderPlayerPage(initial));
+});
 
 const PORT = Number(process.env.PORT || 3000);
 
@@ -1191,6 +1499,85 @@ app.get('/api/jobs/:id/reconstruct/download', async (req, res) => {
     await fsp.unlink(outputPath).catch(() => {});
     activeReconstructs.delete(jobId);
   });
+});
+
+app.get('/api/tokens', async (req, res) => {
+  try {
+    const tokens = await readTokens();
+    res.json({ ok: true, tokens });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tokens', express.json(), async (req, res) => {
+  try {
+    const { username } = req.body;
+    if (!username || !username.trim()) {
+      return res.status(400).json({ ok: false, error: 'Tên người dùng không được để trống' });
+    }
+    
+    const tokens = await readTokens();
+    const tokenStr = `tok_${username.trim().toLowerCase().replace(/[^a-z0-9]/g, '_')}_${uuidv4().slice(0, 8)}`;
+    
+    const newToken = {
+      username: username.trim(),
+      token: tokenStr,
+      createdAt: new Date().toISOString(),
+      active: true
+    };
+    
+    tokens.push(newToken);
+    await writeTokens(tokens);
+    
+    res.json({ ok: true, token: newToken });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/tokens/:token/toggle', async (req, res) => {
+  try {
+    const tokenStr = req.params.token;
+    const tokens = await readTokens();
+    const found = tokens.find(t => t.token === tokenStr);
+    
+    if (!found) {
+      return res.status(404).json({ ok: false, error: 'Không tìm thấy token này' });
+    }
+    
+    found.active = !found.active;
+    await writeTokens(tokens);
+    
+    res.json({ ok: true, token: found });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.delete('/api/tokens/:token', async (req, res) => {
+  try {
+    const tokenStr = req.params.token;
+    let tokens = await readTokens();
+    const initialLength = tokens.length;
+    
+    if (tokenStr === 'tok_admin_default_719') {
+      const activeCount = tokens.filter(t => t.active).length;
+      if (activeCount <= 1) {
+        return res.status(400).json({ ok: false, error: 'Không thể xoá token Admin mặc định duy nhất đang hoạt động' });
+      }
+    }
+    
+    tokens = tokens.filter(t => t.token !== tokenStr);
+    if (tokens.length === initialLength) {
+      return res.status(404).json({ ok: false, error: 'Không tìm thấy token này' });
+    }
+    
+    await writeTokens(tokens);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 const dashboardIndex = path.join(DASHBOARD_DIST, 'index.html');

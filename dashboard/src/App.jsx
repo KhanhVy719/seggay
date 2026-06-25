@@ -1,9 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare, Settings, BookOpen, Code, ExternalLink, FileText
+  Activity, AlertCircle, ArrowRight, Binary, CloudLightning, Copy, Download, Eye, EyeOff, Film, Globe, History, Loader2, MoreVertical, RefreshCw, Save, Scissors, Server, ShieldCheck, UploadCloud, Video, ChevronDown, ChevronUp, Trash2, FolderSync, Waves, Cpu, Database, PlayCircle, TerminalSquare, Settings, BookOpen, Code, ExternalLink, FileText, Key
 } from 'lucide-react';
 
 const API = '';
+
+// Global Fetch Interceptor to inject API Token authentication header
+(function() {
+  const originalFetch = window.fetch;
+  window.fetch = function(url, options = {}) {
+    if (typeof url === 'string' && (url.startsWith('/api/') || url.includes('/api/'))) {
+      const token = localStorage.getItem('api_token') || 'tok_admin_default_719';
+      options.headers = {
+        ...options.headers,
+        'Authorization': `Bearer ${token}`
+      };
+    }
+    return originalFetch.call(this, url, options);
+  };
+})();
 
 function absoluteUrl(path) {
   if (!path) return '';
@@ -15,8 +30,9 @@ function absoluteUrl(path) {
 function jobLinks(jobId) {
   if (!jobId) return { streamUrl: '', embedUrl: '', iframeHtml: '' };
   const encodedJobId = encodeURIComponent(jobId);
-  const streamUrl = absoluteUrl(`/carrier/${encodedJobId}/master.m3u8`);
-  const embedUrl = absoluteUrl(`/player?jobId=${encodedJobId}&direct=1&auto=1&embed=1`);
+  const activeToken = localStorage.getItem('api_token') || 'tok_admin_default_719';
+  const streamUrl = absoluteUrl(`/carrier/${encodedJobId}/master.m3u8?token=${encodeURIComponent(activeToken)}`);
+  const embedUrl = absoluteUrl(`/player?jobId=${encodedJobId}&direct=1&auto=1&embed=1&token=${encodeURIComponent(activeToken)}`);
   const iframeHtml = `<iframe src="${embedUrl.replace(/&/g, '&amp;')}" width="100%" height="600" style="border:0;background:#000;" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;
   return { streamUrl, embedUrl, iframeHtml };
 }
@@ -51,6 +67,7 @@ const navItems = [
   { id: 'cdn', label: 'Cài đặt', icon: Settings },
   { id: 'jobs', label: 'Lịch sử', icon: History },
   { id: 'player', label: 'Trình phát', icon: PlayCircle },
+  { id: 'users', label: 'Quản lý Token', icon: Key },
   { id: 'docs', label: 'Tài liệu API', icon: BookOpen },
 ];
 
@@ -483,6 +500,8 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
     xhr.setRequestHeader('x-filename', file.name);
     xhr.setRequestHeader('x-segment-concurrency', String(segmentConcurrency));
     xhr.setRequestHeader('x-upload-concurrency', String(uploadConcurrency));
+    const activeToken = localStorage.getItem('api_token') || 'tok_admin_default_719';
+    xhr.setRequestHeader('Authorization', `Bearer ${activeToken}`);
 
     xhr.upload.onprogress = event => {
       if (!event.lengthComputable) return;
@@ -1406,7 +1425,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/server/status',
         desc: 'Lấy thông tin trạng thái hoạt động của server Node.js, bao gồm port, uptime, các cấu hình môi trường và số luồng xử lý hiện tại.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "status": "active",\n  "port": 30001,\n  "uptime": 235.42,\n  "env": {\n    "hasCookie": true,\n    "hasCsrf": true,\n    "hasOrg": true,\n    "cookieCount": 20,\n    "xBogusReady": true\n  },\n  "concurrency": {\n    "segmentConcurrency": 2,\n    "uploadConcurrency": 4,\n    "reconstructConcurrency": 8\n  }\n}'
       },
@@ -1414,7 +1433,10 @@ const apiEndpoints = [
         method: 'POST',
         path: '/api/config/concurrency',
         desc: 'Cập nhật cấu hình số luồng song song cho các tác vụ tách HLS, upload CDN và khôi phục video. Ghi trực tiếp vào file .env và cập nhật RAM ngay lập tức.',
-        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        headers: [
+          { name: 'Authorization', value: 'Bearer <token>' },
+          { name: 'Content-Type', value: 'application/json' }
+        ],
         body: '{\n  "segmentConcurrency": 2,\n  "uploadConcurrency": 4,\n  "reconstructConcurrency": 8\n}',
         response: '{\n  "ok": true,\n  "segmentConcurrency": 2,\n  "uploadConcurrency": 4,\n  "reconstructConcurrency": 8\n}'
       },
@@ -1422,7 +1444,10 @@ const apiEndpoints = [
         method: 'POST',
         path: '/api/cookies',
         desc: 'Cập nhật Cookie TikTok đăng nhập mới. Hỗ trợ định dạng JSON J2Team Cookie hoặc chuỗi cookie thô. Tự động parse và lưu vào tệp .env / cập nhật RAM.',
-        headers: [{ name: 'Content-Type', value: 'application/json' }],
+        headers: [
+          { name: 'Authorization', value: 'Bearer <token>' },
+          { name: 'Content-Type', value: 'application/json' }
+        ],
         body: '[\n  { "name": "sessionid", "value": "..." },\n  { "name": "tt_chain_token", "value": "..." }\n]',
         response: '{\n  "ok": true,\n  "cookieCount": 2,\n  "env": {\n    "hasCookie": true,\n    "cookieCount": 2,\n    "xBogusReady": true\n  }\n}'
       },
@@ -1430,7 +1455,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/cookies/health',
         desc: 'Kiểm tra sức khỏe Cookie TikTok đăng nhập bằng cách gửi request test lấy STS upload token. Đảm bảo cookie không bị hết hạn hoặc thiếu quyền.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "status": "alive",\n  "alive": true,\n  "latencyMs": 142,\n  "cookieCount": 2,\n  "message": "Cookie còn sống, lấy STS Upload Token thành công."\n}'
       },
@@ -1438,7 +1463,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/xbogus/health',
         desc: 'Kiểm tra hoạt động của bộ sinh chữ ký X-Bogus (local hoặc jsdom-rpc) bằng cách gửi request giả lập lên TikTok WAF.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "status": "passed",\n  "ok": true,\n  "checkedAt": "2026-06-25T15:00:00.000Z",\n  "latencyMs": 95,\n  "signerMode": "local",\n  "httpStatus": 200,\n  "tikTokStatusCode": 0,\n  "message": "Chữ ký X-Bogus hợp lệ: TikTok đã nhận request..."\n}'
       }
@@ -1452,6 +1477,7 @@ const apiEndpoints = [
         path: '/api/upload',
         desc: 'API tải video nhị phân lên server để đưa vào pipeline xử lý. Server sẽ lưu tạm file, sinh Job ID và thực hiện tác vụ ngầm. Kết nối HTTP được giữ dưới dạng Server-Sent Events (SSE) để truyền logs.',
         headers: [
+          { name: 'Authorization', value: 'Bearer <token>' },
           { name: 'Content-Type', value: 'application/octet-stream' },
           { name: 'x-filename', value: 'video.mp4 (Tên file gốc)' },
           { name: 'x-segment-concurrency', value: '2 (Số luồng tách HLS)' },
@@ -1464,7 +1490,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/jobs/:jobId/events',
         desc: 'Đăng ký nhận luồng sự kiện SSE (Server-Sent Events) của một Job đang chạy ngầm để khôi phục log hiển thị và thanh tiến độ khi người dùng reload trang.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: 'event: progress\ndata: {"step":"ffmpeg-cut","percent":35,"message":"Cắt video thành HLS..."}'
       },
@@ -1472,7 +1498,7 @@ const apiEndpoints = [
         method: 'POST',
         path: '/api/jobs/:jobId/cancel',
         desc: 'Hủy khẩn cấp một job đang xử lý. Tắt tiến trình FFmpeg (nếu đang chạy), dừng các luồng upload CDN, cập nhật trạng thái job thành cancelled.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "ok": true\n}'
       }
@@ -1485,7 +1511,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/jobs',
         desc: 'Lấy danh sách tất cả các Jobs trong hệ thống (bao gồm cả job đang xử lý trong RAM và job đã hoàn thành trên đĩa).',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "jobs": [\n    {\n      "jobId": "a1b2c3d4-...",\n      "createdAt": "2026-06-25T15:00:00.000Z",\n      "updatedAt": "2026-06-25T15:05:00.000Z",\n      "total": 45,\n      "uploaded": 45,\n      "complete": true,\n      "status": "complete",\n      "percent": 100,\n      "size": 10485760,\n      "sourceSize": 10485760\n    }\n  ]\n}'
       },
@@ -1493,7 +1519,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/jobs/:jobId',
         desc: 'Lấy Manifest JSON chi tiết của một job. Chứa danh sách các segments, thời lượng, kích thước và link ảnh carrier CDN.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "jobId": "a1b2c3d4-...",\n  "createdAt": "2026-06-25T15:00:00.000Z",\n  "complete": true,\n  "status": "complete",\n  "segments": [\n    {\n      "index": 0,\n      "duration": 4.12,\n      "uploaded": true,\n      "imageUrl": "/api/jobs/a1b2c3d4-.../images/0",\n      "publicImageUrl": "https://p16-sg.tiktokcdn.com/...",\n      "directImageUrl": "https://p16-sign-sg.tiktokcdn.com/..."\n    }\n  ]\n}'
       },
@@ -1501,7 +1527,7 @@ const apiEndpoints = [
         method: 'DELETE',
         path: '/api/jobs/:jobId',
         desc: 'Xóa hoàn toàn dữ liệu của Job, bao gồm tệp Manifest JSON trên đĩa và thư mục chứa các mảnh video đã mã hoá.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "ok": true\n}'
       }
@@ -1514,7 +1540,7 @@ const apiEndpoints = [
         method: 'POST',
         path: '/api/jobs/:jobId/reconstruct',
         desc: 'Bắt đầu giải mã các segment dạng ảnh PNG carrier trên TikTok CDN thành các file .ts nhị phân và dùng FFmpeg ghép lại thành video MP4 gốc.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "ok": true,\n  "state": {\n    "status": "processing",\n    "percent": 0,\n    "message": "Bắt đầu quá trình khôi phục..."\n  }\n}'
       },
@@ -1522,7 +1548,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/jobs/:jobId/reconstruct/status',
         desc: 'Kiểm tra tiến độ giải mã khôi phục video thời gian thực từ RAM của server.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: '{\n  "status": "processing",\n  "percent": 45,\n  "message": "Đang ghép các phân đoạn video (FFmpeg)...",\n  "error": null\n}'
       },
@@ -1530,9 +1556,49 @@ const apiEndpoints = [
         method: 'GET',
         path: '/api/jobs/:jobId/reconstruct/download',
         desc: 'Tải về video MP4 hoàn chỉnh sau khi khôi phục thành công. Server sẽ tự động xoá file MP4 tạm này ngay khi quá trình download hoàn tất.',
-        headers: [],
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
         body: '',
         response: 'Binary Stream (.mp4 File)'
+      }
+    ]
+  },
+  {
+    category: 'Quản Lý Người dùng & API Token',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/tokens',
+        desc: 'Lấy toàn bộ danh sách các API Tokens trong hệ thống bao gồm Username, Token thô, trạng thái active và ngày tạo.',
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
+        body: '',
+        response: '{\n  "ok": true,\n  "tokens": [\n    {\n      "username": "admin",\n      "token": "tok_admin_default_719",\n      "createdAt": "2026-06-25T15:00:00.000Z",\n      "active": true\n    }\n  ]\n}'
+      },
+      {
+        method: 'POST',
+        path: '/api/tokens',
+        desc: 'Tạo một API Token ngẫu nhiên mới cấp cho một người dùng mới.',
+        headers: [
+          { name: 'Authorization', value: 'Bearer <token>' },
+          { name: 'Content-Type', value: 'application/json' }
+        ],
+        body: '{\n  "username": "ten_nguoi_dung_moi"\n}',
+        response: '{\n  "ok": true,\n  "token": {\n    "username": "ten_nguoi_dung_moi",\n    "token": "tok_ten_nguoi_dung_moi_abc12345",\n    "createdAt": "2026-06-25T15:10:00.000Z",\n    "active": true\n  }\n}'
+      },
+      {
+        method: 'POST',
+        path: '/api/tokens/:token/toggle',
+        desc: 'Bật hoặc tắt (kích hoạt / vô hiệu hóa) tạm thời một API Token mà không cần xóa hẳn.',
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
+        body: '',
+        response: '{\n  "ok": true,\n  "token": {\n    "username": "admin",\n    "token": "tok_admin_default_719",\n    "createdAt": "2026-06-25T15:00:00.000Z",\n    "active": false\n  }\n}'
+      },
+      {
+        method: 'DELETE',
+        path: '/api/tokens/:token',
+        desc: 'Xóa hoàn toàn một API Token khỏi cơ sở dữ liệu. Admin mặc định không thể bị xóa nếu là token hoạt động cuối cùng.',
+        headers: [{ name: 'Authorization', value: 'Bearer <token>' }],
+        body: '',
+        response: '{\n  "ok": true\n}'
       }
     ]
   },
@@ -1543,15 +1609,15 @@ const apiEndpoints = [
         method: 'GET',
         path: '/carrier/:jobId/master.m3u8',
         desc: 'Trả về file Master Playlist định dạng HLS cho trình phát video. Các segment trong file trỏ tới API Proxy giải mã của Server.',
-        headers: [],
+        headers: [{ name: 'token', value: 'tok_admin_default_719' }],
         body: '',
-        response: '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/0.ts\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/1.ts\n#EXT-X-ENDLIST'
+        response: '#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/0.ts?token=tok_admin_default_719\n#EXTINF:4.120,\n/carrier/a1b2c3d4-.../segment/1.ts?token=tok_admin_default_719\n#EXT-X-ENDLIST'
       },
       {
         method: 'GET',
         path: '/carrier/:jobId/segment/:index.ts',
         desc: 'API Fallback / Proxy giải mã segment: Server sẽ tải ảnh PNG từ TikTok CDN về, giải mã nhị phân thành file TS gốc và stream trực tiếp về cho trình phát video HLS.',
-        headers: [],
+        headers: [{ name: 'token', value: 'tok_admin_default_719' }],
         body: '',
         response: 'Binary Stream (.ts Video Segment)'
       },
@@ -1559,7 +1625,7 @@ const apiEndpoints = [
         method: 'GET',
         path: '/player?jobId=:jobId',
         desc: 'Giao diện phát video trực tiếp. Tích hợp Hls.js và thuật toán client-side decoder: Trình duyệt tự tải ảnh PNG từ TikTok CDN về, giải mã trực tiếp bằng Canvas/Web Worker rồi truyền qua MSE để phát. Giảm tải 100% băng thông cho server Node.js.',
-        headers: [],
+        headers: [{ name: 'token', value: 'tok_admin_default_719' }],
         body: '',
         response: 'HTML Page'
       }
@@ -1622,6 +1688,39 @@ fetch('${window.location.origin}${endpoint.path}', ${optionsStr})
     <div className="space-y-6">
       <SectionTitle title="Tài liệu API & Hướng dẫn sử dụng" subtitle="Full API của hệ thống TikTok Carrier Pipeline, phục vụ tích hợp bên thứ ba hoặc phát triển mở rộng." />
       
+      <Card className="p-5 border-cyan-500/20 bg-cyan-500/5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-cyan-300">
+          <ShieldCheck className="h-5 w-5 text-cyan-400" /> Hướng dẫn Xác thực API bằng Token
+        </div>
+        <p className="mt-2 text-xs text-zinc-300 leading-relaxed">
+          Tất cả các yêu cầu gọi tới các dịch vụ API bắt đầu bằng <code>/api/</code> đều phải đính kèm API Token hợp lệ trong yêu cầu để xác thực quyền truy cập. 
+          Hệ thống hỗ trợ 2 cách truyền Token linh hoạt:
+        </p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2 text-xs">
+          <div className="rounded-lg border border-zinc-800/80 bg-zinc-950 p-4">
+            <div className="font-semibold text-zinc-200 flex items-center gap-2">
+              <Code className="h-4 w-4 text-emerald-400" /> Cách 1: Sử dụng Authorization Header (Khuyên dùng)
+            </div>
+            <p className="mt-1 text-zinc-400 text-[11px]">Đính kèm chuỗi Bearer Token vào header của yêu cầu HTTP.</p>
+            <pre className="mt-2.5 p-3 rounded-lg bg-black text-cyan-300 font-mono text-[10px] border border-zinc-800 overflow-x-auto">
+              Authorization: Bearer YOUR_API_TOKEN
+            </pre>
+          </div>
+          <div className="rounded-lg border border-zinc-800/80 bg-zinc-950 p-4">
+            <div className="font-semibold text-zinc-200 flex items-center gap-2">
+              <Globe className="h-4 w-4 text-cyan-400" /> Cách 2: Sử dụng Query Parameter (Tiện lợi)
+            </div>
+            <p className="mt-1 text-zinc-400 text-[11px]">Thêm tham số token vào chuỗi truy vấn (query string) của URL.</p>
+            <pre className="mt-2.5 p-3 rounded-lg bg-black text-cyan-300 font-mono text-[10px] border border-zinc-800 overflow-x-auto">
+              ?token=YOUR_API_TOKEN
+            </pre>
+          </div>
+        </div>
+        <div className="mt-4 text-xs text-zinc-400 leading-relaxed border-t border-zinc-800 pt-3">
+          API Token hoạt động của Dashboard hiện tại: <code className="px-1.5 py-0.5 rounded bg-zinc-800 text-cyan-200 font-mono">{localStorage.getItem('api_token') || 'tok_admin_default_719'}</code>
+        </div>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-4">
         {/* Sidebar */}
         <Card className="p-4 lg:col-span-1 space-y-4 max-h-[80vh] overflow-y-auto">
@@ -1755,6 +1854,268 @@ fetch('${window.location.origin}${endpoint.path}', ${optionsStr})
   );
 }
 
+function TokenManager() {
+  const [tokens, setTokens] = useState([]);
+  const [username, setUsername] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [showToken, setShowToken] = useState({});
+  const [activeTokenInput, setActiveTokenInput] = useState(() => localStorage.getItem('api_token') || 'tok_admin_default_719');
+  
+  async function loadTokens() {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/tokens`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (data.ok) {
+        setTokens(data.tokens || []);
+      }
+    } catch (err) {
+      setError(`Không thể tải danh sách token: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+  
+  useEffect(() => {
+    loadTokens();
+  }, []);
+  
+  async function createToken(e) {
+    e.preventDefault();
+    if (!username.trim()) return;
+    setLoading(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await fetch(`${API}/api/tokens`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setSuccess(`Đã tạo thành công token cho người dùng "${data.token.username}"`);
+        setUsername('');
+        await loadTokens();
+      } else {
+        throw new Error(data.error || 'Lỗi không xác định');
+      }
+    } catch (err) {
+      setError(`Lỗi tạo token: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+  
+  async function toggleToken(tokenStr) {
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/tokens/${tokenStr}/toggle`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        await loadTokens();
+      } else {
+        throw new Error(data.error || 'Lỗi không xác định');
+      }
+    } catch (err) {
+      setError(`Lỗi thay đổi trạng thái token: ${err.message}`);
+    }
+  }
+  
+  async function deleteToken(tokenStr) {
+    if (!confirm(`Bạn có chắc chắn muốn xóa token này?`)) return;
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/tokens/${tokenStr}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        await loadTokens();
+      } else {
+        throw new Error(data.error || 'Lỗi không xác định');
+      }
+    } catch (err) {
+      setError(`Lỗi xóa token: ${err.message}`);
+    }
+  }
+  
+  function saveActiveToken() {
+    const cleanToken = activeTokenInput.trim();
+    if (!cleanToken) {
+      alert('Vui lòng nhập API Token hợp lệ');
+      return;
+    }
+    localStorage.setItem('api_token', cleanToken);
+    alert('Đã lưu token hoạt động. Trang web sẽ tự động reload để áp dụng cấu hình mới.');
+    window.location.reload();
+  }
+  
+  return (
+    <div className="space-y-6">
+      <SectionTitle title="Quản lý Người dùng & API Token" subtitle="Cấp phát, bật/tắt và xóa token xác thực API. Cấu hình token hoạt động cho trình duyệt." />
+      
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Left side: Config dashboard active token & create new token */}
+        <div className="lg:col-span-1 space-y-4">
+          <Card className="p-5">
+            <div className="text-sm font-medium text-zinc-100 mb-4 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-emerald-400" /> Cấu hình Phiên Dashboard
+            </div>
+            <div className="space-y-4">
+              <label className="block space-y-2 text-sm text-zinc-300">
+                <span>Nhập API Token đang sử dụng:</span>
+                <input
+                  type="text"
+                  value={activeTokenInput}
+                  onChange={e => setActiveTokenInput(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
+                  placeholder="tok_admin_default_719"
+                />
+              </label>
+              <Button variant="accent" onClick={saveActiveToken} className="w-full justify-center">
+                <Save className="h-4 w-4" /> Lưu Token Hoạt động
+              </Button>
+            </div>
+            <div className="mt-4 text-xs text-zinc-400 leading-relaxed border-t border-zinc-800/60 pt-3">
+              <strong>Lưu ý:</strong> API Token này được lưu ở bộ nhớ trình duyệt (`localStorage`) để gửi kèm trong header xác thực của các yêu cầu API.
+            </div>
+          </Card>
+          
+          <Card className="p-5">
+            <div className="text-sm font-medium text-zinc-100 mb-4 flex items-center gap-2">
+              <Key className="h-4 w-4 text-cyan-400" /> Cấp API Token mới
+            </div>
+            <form onSubmit={createToken} className="space-y-4">
+              <label className="block space-y-2 text-sm text-zinc-300">
+                <span>Tên người dùng (Username / App):</span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 outline-none focus:ring-2 focus:ring-cyan-500/60"
+                  placeholder="Ví dụ: app_khach_hang_A"
+                  disabled={loading}
+                />
+              </label>
+              <Button type="submit" variant="default" className="w-full justify-center" disabled={loading || !username.trim()}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                Tạo Token
+              </Button>
+            </form>
+            
+            {error && (
+              <div className="mt-3 rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="mt-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-400">
+                {success}
+              </div>
+            )}
+          </Card>
+        </div>
+        
+        {/* Right side: Token list table */}
+        <Card className="lg:col-span-2 overflow-x-auto p-5">
+          <div className="text-sm font-medium text-zinc-100 mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-purple-400" /> Danh sách API Tokens trong Hệ thống
+            </div>
+            <Button variant="ghost" onClick={loadTokens} disabled={loading} className="h-8 px-2 text-xs">
+              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} /> Làm mới
+            </Button>
+          </div>
+          
+          <table className="w-full text-left text-xs">
+            <thead className="bg-zinc-950 text-zinc-500">
+              <tr>
+                <th className="px-4 py-2.5">Người dùng</th>
+                <th className="px-4 py-2.5">API Token</th>
+                <th className="px-4 py-2.5">Ngày tạo</th>
+                <th className="px-4 py-2.5 text-center">Trạng thái</th>
+                <th className="px-4 py-2.5 text-right">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-800 text-zinc-300">
+              {tokens.length ? (
+                tokens.map((item) => {
+                  const isCurrent = item.token === localStorage.getItem('api_token');
+                  return (
+                    <tr key={item.token} className={`hover:bg-zinc-900/30 ${isCurrent ? 'bg-cyan-500/5' : ''}`}>
+                      <td className="px-4 py-3">
+                        <span className="font-semibold text-zinc-100">{item.username}</span>
+                        {isCurrent && <Badge tone="blue" className="ml-1">Đang dùng</Badge>}
+                      </td>
+                      <td className="px-4 py-3 font-mono">
+                        <div className="flex items-center gap-2">
+                          <span>
+                            {showToken[item.token] ? item.token : `${item.token.slice(0, 10)}...`}
+                          </span>
+                          <button
+                            onClick={() => setShowToken(prev => ({ ...prev, [item.token]: !prev[item.token] }))}
+                            className="text-zinc-500 hover:text-zinc-300"
+                            title="Hiện/Ẩn Token"
+                          >
+                            {showToken[item.token] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(item.token);
+                              alert('Đã copy API Token vào clipboard!');
+                            }}
+                            className="text-zinc-500 hover:text-zinc-300"
+                            title="Copy Token"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-zinc-400">
+                        {item.createdAt ? new Date(item.createdAt).toLocaleString('vi-VN') : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => toggleToken(item.token)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${item.active ? 'bg-cyan-500' : 'bg-zinc-700'}`}
+                          title={item.active ? "Click để Vô hiệu hóa" : "Click để Kích hoạt"}
+                        >
+                          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${item.active ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => deleteToken(item.token)}
+                          className="text-red-400 hover:text-red-300 transition-colors p-1"
+                          title="Xóa Token"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan="5" className="px-4 py-8 text-center text-zinc-500">
+                    {loading ? 'Đang tải dữ liệu...' : 'Không tìm thấy Token nào trong hệ thống.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function TerminalPanel({ logs }) {
   return (
     <Card className="mt-6 overflow-hidden">
@@ -1818,6 +2179,7 @@ export default function App() {
     cdn: <CdnManager />,
     jobs: <JobHistory onPlay={playJob} onViewProgress={(jobId) => { setRestoreJobId(jobId); setTab('upload'); }} />,
     player: <CarrierPlayer selectedJob={selectedJob} />,
+    users: <TokenManager />,
     docs: <ApiDocs />,
   };
 
