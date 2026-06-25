@@ -23,12 +23,18 @@ const originalServer = require('./server');
 const app = originalServer;
 
 // Clean up original routes registered in server.js that we want to override
-if (app._router && Array.isArray(app._router.stack)) {
-  app._router.stack = app._router.stack.filter(layer => {
+const routerObj = app.router || app._router;
+if (routerObj && Array.isArray(routerObj.stack)) {
+  routerObj.stack = routerObj.stack.filter(layer => {
     if (!layer.route) return true;
     const path = layer.route.path;
     const methods = layer.route.methods || {};
-    const isGetJobs = methods.get && (path === '/api/jobs' || path === '/api/jobs/:jobId' || path === '/api/jobs/:id');
+    const isGetJobs = methods.get && (
+      path === '/api/jobs' || 
+      path === '/api/jobs/:jobId' || 
+      path === '/api/jobs/:id' || 
+      path === '/'
+    );
     if (isGetJobs) {
       console.log(`[Extension] Removing original route handler: GET ${path}`);
       return false;
