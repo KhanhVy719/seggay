@@ -593,6 +593,251 @@ async function runBackgroundJob(jobId, jobFile, segmentConcurrency, uploadConcur
   }
 }
 
+async function runTorrentBackgroundJob(jobId, magnetUrl, segmentConcurrency, uploadConcurrency) {
+  const job = activeJobs.get(jobId);
+  const progressEvent = (event, data) => {
+    const j = activeJobs.get(jobId);
+    if (j) {
+      j.logs.push({ event, data });
+      for (const client of j.sseClients) {
+        sendSseToClient(client, event, data);
+      }
+    }
+  };
+
+  const tempDir = path.join(ROOT, 'tmp_upload');
+  const downloadDir = path.join(tempDir, `torrent_${jobId}`);
+  await fsp.mkdir(downloadDir, { recursive: true });
+
+  let client;
+  let finished = false;
+
+  try {
+    progressEvent('progress', { step: 'torrent-start', percent: 0, message: 'Đang khởi tạo WebTorrent client...', segmentConcurrency, uploadConcurrency });
+
+    const { default: WebTorrent } = await import('webtorrent');
+    client = new WebTorrent();
+
+    // 1. Tạo manifest ban đầu
+    const manifestPathJson = manifestPath(jobId);
+    const initialManifest = {
+      version: 4,
+      jobId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      complete: false,
+      status: 'processing',
+      source: {
+        filename: 'Tải từ Torrent',
+      },
+      segments: []
+    };
+    await writeJson(manifestPathJson, initialManifest);
+
+    // Timeout nếu không lấy được metadata của torrent trong 60 giây
+    const metadataTimeout = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        if (client) client.destroy();
+        progressEvent('error', { ok: false, error: 'Timeout: Không lấy được metadata torrent (không tìm thấy peers).' });
+      }
+    }, 60000);
+
+    client.add(magnetUrl, { path: downloadDir }, function (torrent) {
+      clearTimeout(metadataTimeout);
+      if (finished) return;
+
+      progressEvent('progress', { step: 'torrent-metadata', percent: 1, message: `Đã kết nối! Đang tìm file video lớn nhất... (Peers: ${torrent.numPeers})` });
+
+      // Tìm file video lớn nhất
+      const videoExtensions = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts', '.m4v'];
+      const videoFiles = torrent.files.filter(f => videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)));
+      
+      const file = videoFiles.length > 0
+        ? videoFiles.reduce((a, b) => a.length > b.length ? a : b)
+        : torrent.files.reduce((a, b) => a.length > b.length ? a : b);
+
+      if (!file) {
+        finished = true;
+        client.destroy();
+        progressEvent('error', { ok: false, error: 'Không tìm thấy file nào trong Torrent.' });
+        return;
+      }
+
+      progressEvent('progress', { step: 'torrent-selected', percent: 2, message: `Đã chọn: ${file.name} (${formatBytes(file.length)})` });
+
+      // Chỉ tải file được chọn, deselect các file khác để tiết kiệm băng thông
+      torrent.files.forEach(f => {
+        if (f !== file) {
+          f.deselect();
+        }
+      });
+
+      let lastEmitTime = Date.now();
+
+      torrent.on('download', function () {
+        if (finished) return;
+        const now = Date.now();
+        if (now - lastEmitTime > 1500) {
+          lastEmitTime = now;
+          const speed = torrent.downloadSpeed;
+          const progress = torrent.progress;
+          const percent = Math.round(progress * 100);
+          
+          progressEvent('progress', {
+            step: 'torrent-downloading',
+            percent: Math.min(99, Math.round(percent * 0.95)), // 0-95% cho download
+            realPercent: percent,
+            message: `Đang tải: ${percent}% (${formatBytes(speed)}/s) · Peers: ${torrent.numPeers}`
+          });
+        }
+      });
+
+      torrent.on('done', async function () {
+        if (finished) return;
+        finished = true;
+
+        const jobFile = path.join(downloadDir, file.path);
+        const filename = file.name;
+        
+        progressEvent('progress', { step: 'torrent-done', percent: 95, message: 'Đã tải xong file video từ Torrent! Bắt đầu xử lý video...' });
+
+        // Cập nhật manifest tên file thật
+        try {
+          const manifest = await loadManifest(jobId);
+          manifest.source.filename = filename;
+          manifest.source.sizeBytes = file.length;
+          await writeJson(manifestPathJson, manifest);
+        } catch (e) {}
+
+        // Giải phóng client
+        client.destroy();
+
+        // Chạy tiếp tục luồng xử lý video (probe, processJob...)
+        try {
+          progressEvent('progress', { step: 'probe', percent: 96, message: 'Video probing', segmentConcurrency, uploadConcurrency });
+          const probe = await tiktokService.probeVideo(jobFile);
+          progressEvent('progress', { step: 'probe-complete', percent: 97, message: 'Probe complete', probe });
+
+          const currentJob = activeJobs.get(jobId);
+          if (currentJob && currentJob.status === 'cancelled') return;
+
+          const result = await tiktokService.processJob(
+            jobFile,
+            4,
+            probe.duration,
+            (percent, message, details = {}) => {
+              const j = activeJobs.get(jobId);
+              if (j) {
+                j.percent = percent;
+                j.step = details.phase || 'pipeline';
+                j.message = message;
+                j.details = details;
+                
+                const eventData = { step: j.step, percent, message, ...details };
+                progressEvent('progress', eventData);
+              }
+            },
+            {
+              ...probe,
+              jobId,
+              source: 'dashboard',
+              segmentConcurrency,
+              uploadConcurrency,
+              isAborted: () => {
+                const j = activeJobs.get(jobId);
+                return !j || j.status === 'cancelled';
+              },
+              onFfmpegSpawn: (ps) => {
+                const j = activeJobs.get(jobId);
+                if (j) j.ffmpegProcess = ps;
+              }
+            }
+          );
+
+          const j = activeJobs.get(jobId);
+          if (j) {
+            if (j.status === 'cancelled') return;
+            j.status = 'complete';
+            j.percent = 100;
+            
+            const doneData = {
+              ok: true,
+              jobId,
+              playlistUrl: result.playlistUrl,
+              carrierPlaylistUrl: result.carrierPlaylistUrl,
+              carrierPlayerUrl: result.carrierPlayerUrl,
+              sizing: result.sizing
+            };
+            progressEvent('done', doneData);
+            
+            for (const client of j.sseClients) {
+              client.end();
+            }
+            j.sseClients.clear();
+            setTimeout(() => activeJobs.delete(jobId), 10 * 60 * 1000);
+          }
+        } catch (err) {
+          const j = activeJobs.get(jobId);
+          if (j) {
+            if (j.status === 'cancelled') return;
+            j.status = 'failed';
+            const errData = { ok: false, error: err.message };
+            progressEvent('error', errData);
+            for (const client of j.sseClients) {
+              client.end();
+            }
+            j.sseClients.clear();
+            setTimeout(() => activeJobs.delete(jobId), 10 * 60 * 1000);
+          }
+          const mPath = manifestPath(jobId);
+          loadManifest(jobId).then(async manifest => {
+            manifest.complete = false;
+            manifest.status = 'failed';
+            manifest.updatedAt = new Date().toISOString();
+            await writeJson(mPath, manifest);
+          }).catch(() => {});
+        } finally {
+          await fsp.unlink(jobFile).catch(() => {});
+          await fsp.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
+        }
+      });
+
+      torrent.on('error', function (err) {
+        if (finished) return;
+        finished = true;
+        client.destroy();
+        progressEvent('error', { ok: false, error: `Lỗi tải Torrent: ${err.message}` });
+        fsp.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
+      });
+    });
+
+    client.on('error', function (err) {
+      if (finished) return;
+      finished = true;
+      progressEvent('error', { ok: false, error: `Lỗi WebTorrent Client: ${err.message}` });
+      fsp.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
+    });
+
+  } catch (err) {
+    finished = true;
+    if (client) {
+      try { client.destroy(); } catch (e) {}
+    }
+    const j = activeJobs.get(jobId);
+    if (j) {
+      j.status = 'failed';
+      progressEvent('error', { ok: false, error: err.message });
+      for (const client of j.sseClients) {
+        client.end();
+      }
+      j.sseClients.clear();
+      setTimeout(() => activeJobs.delete(jobId), 10 * 60 * 1000);
+    }
+    fsp.rm(downloadDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 const ROOT = process.cwd();
 const MANIFEST_ROOT = path.join(ROOT, 'upload', 'tiktok', 'manifests');
 const DASHBOARD_DIST = path.join(ROOT, 'dashboard', 'dist');
@@ -1286,6 +1531,69 @@ app.post('/api/config/concurrency', express.json(), async (req, res) => {
     res.json({ ok: true, segmentConcurrency: seg, uploadConcurrency: up, reconstructConcurrency: rec });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/upload/torrent', express.json(), async (req, res) => {
+  try {
+    const { magnetUrl } = req.body;
+    if (!magnetUrl) {
+      return res.status(400).json({ ok: false, error: 'Thiếu magnetUrl trong body.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    if (res.flushHeaders) res.flushHeaders();
+
+    const segmentConcurrency = clampHeaderInt(req.headers['x-segment-concurrency'], 1, 1, 999999);
+    const uploadConcurrency = clampHeaderInt(req.headers['x-upload-concurrency'], 1, 1, 999999);
+
+    // 1. Tạo jobId và đăng ký activeJobs
+    const jobId = uuidv4();
+    const jobObj = {
+      jobId,
+      filename: 'torrent_download',
+      createdAt: new Date().toISOString(),
+      status: 'processing',
+      percent: 0,
+      step: 'torrent-initialized',
+      message: 'Khởi tạo tiến trình tải Torrent...',
+      details: {},
+      ffmpegProcess: null,
+      logs: [],
+      sseClients: new Set([res])
+    };
+    activeJobs.set(jobId, jobObj);
+
+    // 2. Gửi sự kiện meta ban đầu
+    sendSseToClient(res, 'meta', {
+      ok: true,
+      filename: 'torrent_download',
+      bytes: 0,
+      segmentConcurrency,
+      uploadConcurrency,
+      jobId
+    });
+
+    // 3. Khởi chạy background job (bất đồng bộ)
+    runTorrentBackgroundJob(jobId, magnetUrl, segmentConcurrency, uploadConcurrency);
+
+    // Lắng nghe đóng connection từ phía client
+    req.on('close', () => {
+      const j = activeJobs.get(jobId);
+      if (j) {
+        j.sseClients.delete(res);
+      }
+    });
+
+  } catch (err) {
+    if (res.headersSent) {
+      sendSseToClient(res, 'error', { ok: false, error: err.message });
+      res.end();
+    } else {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   }
 });
 

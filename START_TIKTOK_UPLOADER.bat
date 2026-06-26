@@ -52,6 +52,17 @@ if errorlevel 1 (
 echo [OK] Đầy đủ file mã nguồn.
 echo.
 
+:: 3.5. Kiểm tra kết nối và thư viện Torrent
+echo [CHECK] Đang chạy kiểm tra khởi tạo thư viện Torrent (WebTorrent)...
+node test_torrent.js
+if errorlevel 1 (
+    echo [LỖI] WebTorrent kiểm tra thất bại!
+    pause
+    exit /b 1
+)
+echo [OK] WebTorrent hoạt động tốt.
+echo.
+
 :: 4. Đọc PORT từ file .env nếu có, mặc định là 30001
 set PORT=30001
 if exist .env (

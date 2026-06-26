@@ -20,7 +20,8 @@ const files = [
     'public/carrier-worker.js',
     'deobfuscator/select_account.html',
     'deobfuscator/webmssdk_original.js',
-    'dashboard/dist/index.html'
+    'dashboard/dist/index.html',
+    'test_torrent.js'
 ];
 
 // Tự tạo file .env mẫu nếu thiếu

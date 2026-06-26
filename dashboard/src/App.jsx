@@ -355,6 +355,8 @@ function normalizeThreadInput(value, fallback, min, max) {
 }
 
 function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
+  const [uploadMethod, setUploadMethod] = useState('local'); // 'local' | 'torrent'
+  const [magnetUrl, setMagnetUrl] = useState('');
   const [file, setFile] = useState(null);
   const [browserUploadProgress, setBrowserUploadProgress] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -452,6 +454,13 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
       const phasePercent = Math.max(0, Math.min(100, Number(data.realPercent ?? nextPercent)));
       setProgress(nextPercent);
       setStep(data.message || (data.step === 'probe' ? 'Đang phân tích video...' : 'Đang xử lý pipeline...'));
+      
+      if (data.step === 'torrent-downloading' || data.step === 'torrent-selected' || data.step === 'torrent-metadata' || data.step === 'torrent-start') {
+        setBrowserUploadProgress(phasePercent);
+      } else if (data.step === 'torrent-done') {
+        setBrowserUploadProgress(100);
+      }
+
       if (data.step === 'probe') {
         setSegments(prev => ({ ...prev, phasePercent: 0 }));
       }
@@ -553,6 +562,63 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
     xhr.send(file);
   }
 
+  function submitTorrent() {
+    if (!magnetUrl.trim() || uploading) return;
+    xhrRef.current?.abort();
+    setUploading(true);
+    setStep('Đang gửi yêu cầu tải torrent lên server...');
+    setBrowserUploadProgress(0);
+    setProgress(0);
+    setShare(null);
+    setSegments({ current: 0, total: 0, uploaded: 0, phasePercent: 0, duration: 0, file: '' });
+    appendUploadLog(`Bắt đầu tải torrent từ Magnet Link...`);
+    appendUploadLog(`Cấu hình đa luồng: tách HLS ${segmentConcurrency} luồng · upload CDN ${uploadConcurrency} luồng`);
+
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
+    let seen = 0;
+    let buffer = '';
+
+    xhr.open('POST', `${API}/api/upload/torrent`);
+    xhr.setRequestHeader('content-type', 'application/json');
+    xhr.setRequestHeader('x-segment-concurrency', String(segmentConcurrency));
+    xhr.setRequestHeader('x-upload-concurrency', String(uploadConcurrency));
+    const activeToken = localStorage.getItem('api_token') || 'tok_admin_default_719';
+    xhr.setRequestHeader('Authorization', `Bearer ${activeToken}`);
+
+    xhr.onprogress = () => {
+      const nextText = xhr.responseText.slice(seen);
+      seen = xhr.responseText.length;
+      buffer += nextText;
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() || '';
+      chunks.forEach(handleSseChunk);
+    };
+
+    xhr.onload = () => {
+      if (buffer.trim()) handleSseChunk(buffer.trim());
+      if (xhr.status < 200 || xhr.status >= 300) {
+        setUploading(false);
+        setStep(`Lỗi upload torrent: HTTP ${xhr.status}`);
+        appendUploadLog(`Lỗi HTTP ${xhr.status} khi gọi /api/upload/torrent`);
+      }
+    };
+
+    xhr.onerror = () => {
+      setUploading(false);
+      setStep('Lỗi upload torrent: Không kết nối được server');
+      appendUploadLog('Lỗi upload torrent: Không kết nối được server backend');
+    };
+
+    xhr.onabort = () => {
+      setUploading(false);
+      setStep('Đã hủy upload torrent');
+      appendUploadLog('Đã hủy upload torrent hiện tại');
+    };
+
+    xhr.send(JSON.stringify({ magnetUrl }));
+  }
+
   const segmentLabel = segments.total ? `${segments.current}/${segments.total}` : '0/0';
   const uploadedLabel = segments.total ? `${segments.uploaded}/${segments.total}` : '0/0';
   const steps = [
@@ -568,18 +634,50 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
     <div className="space-y-6">
       <SectionTitle title="Tải video" subtitle="Kéo thả, cấu hình carrier, stepper thời gian thực, chia sẻ." />
       <Card className="p-5">
-        <div
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => { e.preventDefault(); setFile(e.dataTransfer.files?.[0] || null); }}
-          onClick={() => inputRef.current?.click()}
-          className="flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-950/60 px-6 text-center transition-colors hover:border-zinc-500"
-        >
-          <input ref={inputRef} type="file" accept="video/*" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
-          <UploadCloud className="h-10 w-10 text-zinc-400" />
-          <div className="mt-3 text-lg font-medium">Thả video vào đây</div>
-          <div className="text-sm text-zinc-400">hoặc bấm để chọn file</div>
-          {file ? <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</div> : null}
+        <div className="mb-5 flex gap-2 border-b border-zinc-800 pb-4">
+          <button
+            onClick={() => !uploading && setUploadMethod('local')}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${uploadMethod === 'local' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+            disabled={uploading}
+          >
+            Tải file từ máy
+          </button>
+          <button
+            onClick={() => !uploading && setUploadMethod('torrent')}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${uploadMethod === 'torrent' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'}`}
+            disabled={uploading}
+          >
+            Tải qua Torrent
+          </button>
         </div>
+
+        {uploadMethod === 'local' ? (
+          <div
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); setFile(e.dataTransfer.files?.[0] || null); }}
+            onClick={() => inputRef.current?.click()}
+            className="flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-zinc-700 bg-zinc-950/60 px-6 text-center transition-colors hover:border-zinc-500"
+          >
+            <input ref={inputRef} type="file" accept="video/*" className="hidden" onChange={e => setFile(e.target.files?.[0] || null)} />
+            <UploadCloud className="h-10 w-10 text-zinc-400" />
+            <div className="mt-3 text-lg font-medium">Thả video vào đây</div>
+            <div className="text-sm text-zinc-400">hoặc bấm để chọn file</div>
+            {file ? <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</div> : null}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-5 space-y-3">
+            <label className="block text-sm font-medium text-zinc-300">Nhập Magnet Link / Torrent URL</label>
+            <input
+              type="text"
+              value={magnetUrl}
+              onChange={e => setMagnetUrl(e.target.value)}
+              disabled={uploading}
+              className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-cyan-500/70"
+              placeholder="magnet:?xt=urn:btih:..."
+            />
+            <p className="text-xs text-zinc-500">Hệ thống sẽ tải torrent về server tạm, tự động lọc file video lớn nhất và chuyển tiếp qua pipeline upload TikTok.</p>
+          </div>
+        )}
 
         <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
           <div className="flex items-center gap-2 font-medium">
@@ -592,7 +690,11 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
         </div>
 
         <div className="mt-4 flex items-center gap-3">
-          <Button variant="accent" onClick={submit} disabled={!file || uploading}>
+          <Button
+            variant="accent"
+            onClick={uploadMethod === 'local' ? submit : submitTorrent}
+            disabled={uploading || (uploadMethod === 'local' ? !file : !magnetUrl.trim())}
+          >
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
             {uploading ? 'Đang upload...' : 'Tải lên'}
           </Button>
@@ -611,7 +713,9 @@ function VideoUploader({ onLog, serverStatus, restoreJobId, onClearRestore }) {
           </div>
           <div className="grid gap-3 md:grid-cols-5">
             <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
-              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">% gửi file</div>
+              <div className="text-xs uppercase tracking-[0.16em] text-zinc-500">
+                {uploadMethod === 'torrent' ? '% tải torrent' : '% gửi file'}
+              </div>
               <div className="mt-2 font-mono text-2xl font-bold text-emerald-300">{browserUploadProgress}%</div>
               <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-800"><div className="h-full rounded-full bg-emerald-400 transition-all duration-300" style={{ width: `${browserUploadProgress}%` }} /></div>
             </div>

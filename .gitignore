@@ -13,6 +13,7 @@ public/upload/
 
 # Exclude test files
 test_*.js
+!test_torrent.js
 check_seg.js
 avatar_*.js
 fetch_webmssdk.js
